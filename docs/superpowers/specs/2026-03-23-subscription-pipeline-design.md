@@ -6,7 +6,7 @@
 
 **Architecture:** Add a subscription-ingest scheduler that pulls multiple sources (global default interval with per-sub override), normalizes nodes, applies blacklist filtering, and stores per-user nodes. A detection loop updates node status and triggers blacklist rules. A tokenized public feed endpoint renders filtered nodes in multiple formats (Clash priority). Admin UI manages users, subscriptions, blacklist, and export rules.
 
-**Tech Stack:** FastAPI, SQLite, Xray core, Jinja2, Uvicorn, Python scheduler thread, optional PyYAML for Clash parsing.
+**Tech Stack:** FastAPI, SQLite, Xray core, Jinja2, Uvicorn, Python scheduler thread, optional PyYAML for Clash parsing, optional Sing-box parser.
 
 ---
 
@@ -28,7 +28,11 @@
 **`nodes` (extend)**
 - `source_sub_id` (nullable)
 - `disabled` (0/1), `disabled_reason` (manual/blacklist)
-- `blacklist_until` (timestamp)
+- `blacklist_until` (timestamp, informational)
+
+**`node_fingerprint` (derived)**
+- Prefer normalized key (type + address + port + uuid/password + transport)
+- Fallback: hash(raw) when normalization fails
 
 **`node_status` (extend)**
 - `success_rate`, `last_ok`, `last_fail`, `avg_latency`
@@ -47,7 +51,7 @@
 - Runs every 30s; selects due subscriptions (`enabled=1` and `now >= next_run`).
 - Interval = subscription override or global default.
 - Fetch URL; parse to node list; normalize.
-- Apply blacklist filter: if node id in blacklist and not manually cleared → skip.
+- Apply blacklist filter: if `disabled_reason='blacklist'` and **not manually restored** → skip even if `blacklist_until` expired.
 - Upsert nodes with `source_sub_id`.
 
 ### 3.2 Detection & Blacklist
@@ -55,11 +59,12 @@
   - `consecutive_fail` and `success_rate` / `avg_latency`.
 - If `consecutive_fail >= 3` then:
   - `disabled=1`, `disabled_reason='blacklist'`, `blacklist_until=now+3days`.
-- No automatic unblacklist. Admin can manually restore.
+- No automatic unblacklist. Admin can manually restore (clears `disabled`, `disabled_reason`, `blacklist_until`, and resets counters).
 
 ### 3.3 Exported Feeds
 - Token URL: `/sub/<token>?format=clash|raw|base64|singbox`
 - Apply OR rules from `rules_json`.
+- If rule list is empty, include all nodes (default).
 - Format rendering:
   - Clash YAML (priority) using node mapping
   - Raw link list
@@ -88,10 +93,11 @@ Example rules list:
 Rule evaluation: include node if **any** rule passes.
 
 ## 6) Safety & Performance
-- Dedup by node fingerprint (hash of raw)
+- Dedup by node fingerprint (prefer normalized key; fallback hash(raw))
 - Limit fetch size & parse timeouts
 - Log errors to subscription `last_error`
 - Avoid repeated tests for disabled nodes unless manually restored
+- Per-user running flags to avoid overlapping scheduled fetch/test
 
 ## 7) Migration Plan
 - Add new tables and columns (safe ALTERs).
@@ -102,6 +108,7 @@ Rule evaluation: include node if **any** rule passes.
 ## 8) Open Questions
 - Sing-box schema breadth (minimal vs full compatibility)
 - Clash output completeness (ws/grpc/reality details)
+- Whether to allow per-export sorting (latency asc) and max count limits
 
 ---
 
