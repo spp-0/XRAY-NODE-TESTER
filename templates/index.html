@@ -1,0 +1,182 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Xray 节点检测系统</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="page">
+    <header class="header modern">
+      <div class="brand-block">
+        <div class="brand-pill">XRAY NODE TESTER</div>
+        <h1>节点检测控制台</h1>
+        <div class="sub">数据目录：/data/xray1</div>
+      </div>
+      <div class="status modern">
+        <div class="user-line">当前用户：<strong>{{ username }}</strong></div>
+        <div><strong>运行中：</strong><span id="running">{{ '是' if status.running else '否' }}</span></div>
+        <div><strong>进度：</strong><span id="progress">{{ status.done }}/{{ status.total }}</span></div>
+        <div><strong>开始：</strong><span id="started">{{ status.started_at or '-' }}</span></div>
+        <div><strong>结束：</strong><span id="finished">{{ status.finished_at or '-' }}</span></div>
+        <div class="header-actions">
+          <a class="btn ghost" href="/password">修改密码</a>
+          {% if role == 'admin' %}
+            <a class="btn" href="/admin">管理员后台</a>
+          {% endif %}
+          <form method="post" action="/api/logout" class="inline">
+            <button type="submit" class="ghost">退出登录</button>
+          </form>
+        </div>
+      </div>
+    </header>
+
+    <section class="card split">
+      <div class="split-col">
+        <h2>检测网址设置</h2>
+        <form id="test-url-form">
+          <label>当前检测网址</label>
+          <input type="text" id="test-url" value="{{ test_url }}" placeholder="https://example.com" required />
+          <button type="submit">保存</button>
+        </form>
+      </div>
+      <div class="split-col">
+        <h2>自动检测</h2>
+        <form id="auto-check-form">
+          <label>开关</label>
+          <div class="toggle-line">
+            <label class="switch">
+              <input type="checkbox" id="auto-enabled" {% if auto_check_enabled == 1 %}checked{% endif %} />
+              <span class="slider"></span>
+            </label>
+            <span class="muted">开启后定时检测你的节点</span>
+          </div>
+          <label>检测间隔</label>
+          <div class="row-actions">
+            <input type="text" id="auto-interval-value" value="{{ auto_interval_value }}" placeholder="请输入数字" />
+            <select id="auto-interval-unit">
+              <option value="minute" {% if auto_interval_unit == 'minute' %}selected{% endif %}>分钟</option>
+              <option value="hour" {% if auto_interval_unit == 'hour' %}selected{% endif %}>小时</option>
+              <option value="day" {% if auto_interval_unit == 'day' %}selected{% endif %}>天</option>
+              <option value="week" {% if auto_interval_unit == 'week' %}selected{% endif %}>周</option>
+            </select>
+          </div>
+          <button type="submit">保存设置</button>
+          <div class="hint">下次执行：<span id="next-run">{{ next_run_at or '-' }}</span></div>
+        </form>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>订阅导入</h2>
+      <form id="sub-form">
+        <label>订阅地址（每行一个，支持明文/Base64/Clash）</label>
+        <textarea name="urls" id="sub-urls" placeholder="https://example.com/sub\nhttps://example.com/clash.yaml" required></textarea>
+        <button type="submit">开始订阅导入</button>
+      </form>
+      <div class="hint" id="sub-result"></div>
+    </section>
+
+    <section class="card">
+      <h2>节点导入</h2>
+      <form id="import-form">
+        <label>每行一个节点链接（单行即新增，多行即批量导入）</label>
+        <textarea name="raw" id="import-raw" placeholder="vmess://...&#10;vless://...&#10;trojan://...&#10;ss://..." required></textarea>
+        <button type="submit">开始导入</button>
+      </form>
+      <div class="hint" id="import-result"></div>
+    </section>
+
+
+    <section class="card">
+      <div class="row">
+        <h2>节点列表（共 {{ total }} 条）</h2>
+        <div class="row-actions">
+          <button id="test-filtered">测试筛选</button>
+          <button id="test-all">全部测试</button>
+          <button id="test-stop" class="ghost">停止测试</button>
+          <button id="delete-all" class="danger">删除全部</button>
+          <button id="delete-filtered" class="danger">删除筛选</button>
+          <a class="btn" href="/api/export/txt">导出 TXT</a>
+          <a class="btn" href="/api/export/json">导出 JSON</a>
+        </div>
+      </div>
+
+      <form id="filter-form" method="get" class="filter">
+        <input type="text" name="q" placeholder="搜索（地址/名称/原始链接）" value="{{ q }}" />
+        <select name="type">
+          <option value="all" {% if type_filter == 'all' %}selected{% endif %}>全部类型</option>
+          <option value="vmess" {% if type_filter == 'vmess' %}selected{% endif %}>vmess</option>
+          <option value="vless" {% if type_filter == 'vless' %}selected{% endif %}>vless</option>
+          <option value="trojan" {% if type_filter == 'trojan' %}selected{% endif %}>trojan</option>
+          <option value="ss" {% if type_filter == 'ss' %}selected{% endif %}>ss</option>
+        </select>
+        <select name="status">
+          <option value="all" {% if status_filter == 'all' %}selected{% endif %}>全部状态</option>
+          <option value="ok" {% if status_filter == 'ok' %}selected{% endif %}>可用</option>
+          <option value="fail" {% if status_filter == 'fail' %}selected{% endif %}>不可用</option>
+          <option value="unknown" {% if status_filter == 'unknown' %}selected{% endif %}>未检测</option>
+        </select>
+        <select name="page_size" id="page-size">
+          <option value="20" {% if page_size == 20 %}selected{% endif %}>每页 20</option>
+          <option value="50" {% if page_size == 50 %}selected{% endif %}>每页 50</option>
+          <option value="100" {% if page_size == 100 %}selected{% endif %}>每页 100</option>
+        </select>
+        <button type="submit">筛选</button>
+      </form>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>名称</th>
+              <th>类型</th>
+              <th>地址</th>
+              <th>端口</th>
+              <th>网络</th>
+              <th>TLS</th>
+              <th>状态</th>
+              <th>延迟</th>
+              <th>检测时间</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+          {% for n in nodes %}
+            <tr data-id="{{ n.id }}">
+              <td class="mono">{{ n.name or n.extra.ps or n.address or 'n/a' }}</td>
+              <td>{{ n.type }}</td>
+              <td class="mono">{{ n.address or '' }}</td>
+              <td class="mono">{{ n.port or '' }}</td>
+              <td>{{ n.net or '' }}</td>
+              <td>{{ n.tls or n.security or '' }}</td>
+              <td class="status-{{ n.status }} status-cell">{{ n.status or '' }}</td>
+              <td class="mono latency-cell">{{ n.latency_ms or '' }}</td>
+              <td class="mono checked-cell">{{ n.checked_at or '' }}</td>
+              <td class="actions">
+                <button class="test-btn" data-id="{{ n.id }}">测试</button>
+                <button class="edit-btn" data-id="{{ n.id }}" data-type="{{ n.type }}" data-raw="{{ n.raw | e }}">编辑</button>
+                <button class="del-btn" data-id="{{ n.id }}">删除</button>
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="pager">
+        <div>第 {{ page }} / {{ total_pages }} 页</div>
+        <div class="row-actions">
+          {% if page > 1 %}
+            <a class="btn" href="?{{ qs_base }}page={{ page - 1 }}">上一页</a>
+          {% endif %}
+          {% if page < total_pages %}
+            <a class="btn" href="?{{ qs_base }}page={{ page + 1 }}">下一页</a>
+          {% endif %}
+        </div>
+      </div>
+    </section>
+  </div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

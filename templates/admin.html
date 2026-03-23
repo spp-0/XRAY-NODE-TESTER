@@ -1,0 +1,91 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>管理员后台 - Xray 节点检测系统</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="page">
+    <header class="header modern">
+      <div class="brand-block">
+        <div class="brand-pill">ADMIN CONSOLE</div>
+        <h1>管理员后台</h1>
+        <div class="sub">用户管理、会话控制与系统概览</div>
+      </div>
+      <div class="status modern">
+        <div class="header-actions">
+          <a class="btn" href="/">返回首页</a>
+          <form method="post" action="/api/logout" class="inline">
+            <button type="submit" class="ghost">退出登录</button>
+          </form>
+        </div>
+      </div>
+    </header>
+
+    <section class="card split">
+      <div class="split-col">
+        <h2>系统概览</h2>
+        <div class="hint">用户数：<strong>{{ total_users }}</strong></div>
+        <div class="hint">节点总数：<strong>{{ total_nodes }}</strong></div>
+        <div class="hint">登录限制：{{ login_window }} 分钟内最多 {{ login_limit }} 次，锁定 {{ login_lock }} 分钟</div>
+        <div class="hint">默认自动检测间隔：{{ auto_interval }} 分钟</div>
+      </div>
+      <div class="split-col">
+        <h2>创建用户</h2>
+        <form id="admin-create-form">
+          <label>用户名</label>
+          <input type="text" id="new-username" placeholder="例如 user1" required />
+          <label>密码</label>
+          <input type="password" id="new-password" placeholder="至少 6 位" required />
+          <label>角色</label>
+          <select id="new-role">
+            <option value="user">普通用户</option>
+            <option value="admin">管理员</option>
+          </select>
+          <button type="submit">创建用户</button>
+        </form>
+        <div class="hint" id="admin-create-result"></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>用户管理</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>用户名</th>
+              <th>角色</th>
+              <th>节点数</th>
+              <th>会话数</th>
+              <th>创建时间</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+          {% for u in users %}
+            <tr>
+              <td class="mono">{{ u.username }}</td>
+              <td>{{ u.role }}</td>
+              <td>{{ u.node_count }}</td>
+              <td>{{ u.session_count }}</td>
+              <td class="mono">{{ u.created_at }}</td>
+              <td class="actions">
+                <button class="admin-role-btn" data-username="{{ u.username }}">改角色</button>
+                <button class="admin-pass-btn" data-username="{{ u.username }}">重置密码</button>
+                <button class="admin-logout-btn" data-username="{{ u.username }}">踢下线</button>
+                <button class="admin-delete-btn" data-username="{{ u.username }}">删除</button>
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

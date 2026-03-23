@@ -1,0 +1,42 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>登录 - Xray 节点检测系统</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body class="login-page">
+  <div class="login-shell">
+    <div class="login-hero">
+      <div class="brand">XRAY NODE TESTER</div>
+      <h1>节点检测 · 管理平台</h1>
+      <p>高并发检测、可视化监控、批量筛选与导入导出。为局域网环境优化的轻量化控制台。</p>
+      <div class="hero-tags">
+        <span>批量导入</span>
+        <span>流式检测</span>
+        <span>权限控制</span>
+        <span>定时检测</span>
+      </div>
+    </div>
+
+    <section class="login-card">
+      <div class="card-head">
+        <h2>欢迎登录</h2>
+        <div class="muted">请输入账号密码以继续</div>
+      </div>
+      {% if error %}
+        <div class="error">{{ error }}</div>
+      {% endif %}
+      <form method="post" action="/api/login">
+        <label>用户名</label>
+        <input type="text" name="username" placeholder="请输入用户名" required />
+        <label>密码</label>
+        <input type="password" name="password" placeholder="请输入密码" required />
+        <button type="submit" class="primary">登录</button>
+      </form>
+      <div class="footnote">多次失败会触发短时锁定，保护系统安全。</div>
+    </section>
+  </div>
+</body>
+</html>
