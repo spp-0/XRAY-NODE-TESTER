@@ -210,6 +210,36 @@ def _init_db():
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS subscriptions (
+                id TEXT PRIMARY KEY,
+                owner TEXT NOT NULL,
+                name TEXT NOT NULL,
+                url TEXT NOT NULL,
+                type TEXT NOT NULL,
+                enabled INTEGER NOT NULL,
+                interval_min INTEGER,
+                last_fetch_at TEXT,
+                last_status TEXT,
+                last_error TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS export_rules (
+                id TEXT PRIMARY KEY,
+                owner TEXT NOT NULL,
+                name TEXT NOT NULL,
+                token TEXT NOT NULL,
+                format TEXT NOT NULL,
+                enabled INTEGER NOT NULL,
+                rules_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
         _migrate_schema(conn)
         conn.commit()
     finally:
