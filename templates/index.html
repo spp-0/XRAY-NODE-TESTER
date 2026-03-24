@@ -21,6 +21,11 @@
         <div><strong>开始：</strong><span id="started">{{ status.started_at or '-' }}</span></div>
         <div><strong>结束：</strong><span id="finished">{{ status.finished_at or '-' }}</span></div>
         <div class="header-actions">
+          <a class="btn" href="/subscriptions">订阅管理</a>
+          <a class="btn" href="/exports">导出规则</a>
+          {% if role == 'admin' %}
+            <a class="btn" href="/admin/blacklist">黑名单管理</a>
+          {% endif %}
           <a class="btn ghost" href="/password">修改密码</a>
           {% if role == 'admin' %}
             <a class="btn" href="/admin">管理员后台</a>

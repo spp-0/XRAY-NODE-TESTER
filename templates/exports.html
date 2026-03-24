@@ -39,7 +39,7 @@
           <select id="export-format">
             <option value="clash">clash</option>
             <option value="base64">base64</option>
-            <option value="raw">raw</option>
+            <option value="v2ray">v2ray</option>
             <option value="singbox">singbox</option>
           </select>
           <label>启用状态</label>
@@ -97,13 +97,13 @@
             {% for r in items %}
             <tr data-rule-id="{{ r.id }}" data-name="{{ r.name|e }}" data-format="{{ r.format }}" data-enabled="{{ r.enabled }}" data-rules-json="{{ r.rules_json|e }}" data-token="{{ r.token }}">
               <td>{{ r.name }}</td>
-              <td>{{ r.format }}</td>
+              <td>{{ 'v2ray' if r.format == 'raw' else r.format }}</td>
               <td>{{ '是' if r.enabled == 1 else '否' }}</td>
               <td class="mono wrap">{{ r.rules_json }}</td>
-              <td class="mono wrap">{{ base_url }}/sub/{{ r.token }}?format={{ r.format }}</td>
+              <td class="mono wrap">{{ base_url }}/sub/{{ r.token }}?format={{ 'v2ray' if r.format == 'raw' else r.format }}</td>
               <td class="mono">{{ r.created_at }}</td>
               <td class="actions">
-                <button class="export-copy-btn" data-url="{{ base_url }}/sub/{{ r.token }}?format={{ r.format }}">复制链接</button>
+                <button class="export-copy-btn" data-url="{{ base_url }}/sub/{{ r.token }}?format={{ 'v2ray' if r.format == 'raw' else r.format }}">复制链接</button>
                 <button class="export-edit-btn" data-id="{{ r.id }}">编辑</button>
                 <button class="export-del-btn" data-id="{{ r.id }}">删除</button>
               </td>

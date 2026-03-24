@@ -31,6 +31,19 @@
 
     <section class="card">
       <h2>新增订阅</h2>
+      <form id="sub-blacklist-form" class="grid-form">
+        <label>自动拉黑失败节点</label>
+        <div class="toggle-line">
+          <label class="switch">
+            <input type="checkbox" id="sub-auto-blacklist-enabled" {% if auto_blacklist_enabled == 1 %}checked{% endif %} />
+            <span class="slider"></span>
+          </label>
+          <span class="muted">开启后：连续失败 3 次自动拉黑（3天，需人工恢复）</span>
+        </div>
+        <button type="submit">保存自动拉黑设置</button>
+      </form>
+      <div class="hint" id="sub-blacklist-result"></div>
+
       <form id="sub-create-form" class="grid-form">
         <label>名称</label>
         <input type="text" id="sub-name" placeholder="例如：机场A主订阅" required />

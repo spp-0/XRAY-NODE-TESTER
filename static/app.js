@@ -398,6 +398,20 @@ for (const btn of document.querySelectorAll('.sub-del-btn')) {
   });
 }
 
+const subBlacklistForm = document.getElementById('sub-blacklist-form');
+if (subBlacklistForm) {
+  subBlacklistForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const enabled = document.getElementById('sub-auto-blacklist-enabled').checked ? 1 : 0;
+    const body = new URLSearchParams({ enabled: enabled.toString() });
+    const res = await api('/api/subscriptions/auto-blacklist', { method: 'POST', body });
+    const el = document.getElementById('sub-blacklist-result');
+    if (el) {
+      el.textContent = res.enabled === 1 ? '自动拉黑已开启' : '自动拉黑已关闭';
+    }
+  });
+}
+
 // Exports page
 let exportRulesDraft = [];
 function renderExportRuleDraft() {
@@ -485,7 +499,7 @@ for (const btn of document.querySelectorAll('.export-edit-btn')) {
     if (!id || !row) return;
     const name = prompt('规则名称：', row.dataset.name || '');
     if (!name) return;
-    const format = prompt('输出格式（clash/raw/base64/singbox）：', row.dataset.format || 'clash');
+    const format = prompt('输出格式（clash/v2ray/base64/singbox）：', row.dataset.format || 'clash');
     if (!format) return;
     const enabled = prompt('启用状态（1启用/0禁用）：', row.dataset.enabled || '1');
     if (!enabled) return;

@@ -313,6 +313,18 @@ def _set_setting(key: str, value: str):
         conn.close()
 
 
+def _get_user_auto_blacklist_enabled(username: str) -> int:
+    try:
+        value = _get_setting(f"auto_blacklist_enabled:{username}", "1")
+        return 1 if int(value) == 1 else 0
+    except Exception:
+        return 1
+
+
+def _set_user_auto_blacklist_enabled(username: str, enabled: int):
+    _set_setting(f"auto_blacklist_enabled:{username}", "1" if int(enabled) == 1 else "0")
+
+
 def _get_default_sub_interval() -> int:
     try:
         value = _get_setting("default_sub_interval_min", str(DEFAULT_SUB_INTERVAL_MIN))
@@ -1149,7 +1161,7 @@ def _update_status(owner: str, node_id: str, result: dict):
             )
         )
 
-        if not success and new_fail >= 3:
+        if (not success) and new_fail >= 3 and _get_user_auto_blacklist_enabled(owner) == 1:
             blacklist_until = (datetime.now() + timedelta(days=3)).strftime("%Y-%m-%d %H:%M:%S")
             conn.execute(
                 """
@@ -1815,6 +1827,7 @@ def subscriptions_page(request: Request):
             "items": [dict(r) for r in rows],
             "username": request.state.user,
             "role": request.state.role,
+            "auto_blacklist_enabled": _get_user_auto_blacklist_enabled(request.state.user),
         },
     )
 
@@ -2000,6 +2013,12 @@ def pull_subscription(request: Request, sub_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/subscriptions/auto-blacklist")
+def set_subscription_auto_blacklist(request: Request, enabled: int = Form(...)):
+    _set_user_auto_blacklist_enabled(request.state.user, 1 if int(enabled) == 1 else 0)
+    return {"success": True, "enabled": _get_user_auto_blacklist_enabled(request.state.user)}
+
+
 @app.get("/exports", response_class=HTMLResponse)
 def exports_page(request: Request):
     conn = _db()
@@ -2055,7 +2074,7 @@ def create_export_rule(
     rules_json: str = Form("[]"),
 ):
     fmt = (format or "clash").strip().lower()
-    if fmt not in ("clash", "raw", "base64", "singbox"):
+    if fmt not in ("clash", "raw", "v2ray", "base64", "singbox"):
         raise HTTPException(status_code=400, detail="invalid format")
     # Validate JSON shape (list of objects)
     rules = _parse_rules_json(rules_json)
@@ -2092,7 +2111,7 @@ def update_export_rule(
         params.append(name.strip())
     if format.strip():
         fmt = format.strip().lower()
-        if fmt not in ("clash", "raw", "base64", "singbox"):
+        if fmt not in ("clash", "raw", "v2ray", "base64", "singbox"):
             raise HTTPException(status_code=400, detail="invalid format")
         updates.append("format=?")
         params.append(fmt)
@@ -2154,7 +2173,7 @@ def public_subscription(token: str, format: str | None = None):
         raise HTTPException(status_code=404, detail="subscription not found")
 
     fmt = (format or rule["format"] or "clash").strip().lower()
-    if fmt not in ("clash", "raw", "base64", "singbox"):
+    if fmt not in ("clash", "raw", "v2ray", "base64", "singbox"):
         raise HTTPException(status_code=400, detail="invalid format")
 
     rules = _parse_rules_json(rule["rules_json"] or "[]")
@@ -2162,7 +2181,7 @@ def public_subscription(token: str, format: str | None = None):
 
     if fmt == "clash":
         return PlainTextResponse(_render_clash(links), media_type="text/yaml; charset=utf-8")
-    if fmt == "raw":
+    if fmt in ("raw", "v2ray"):
         return PlainTextResponse(_render_raw(links), media_type="text/plain; charset=utf-8")
     if fmt == "base64":
         return PlainTextResponse(_render_base64(links), media_type="text/plain; charset=utf-8")
