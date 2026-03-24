@@ -37,6 +37,7 @@ LOGIN_MAX_ATTEMPTS = int(os.environ.get("XRAY_LOGIN_MAX_ATTEMPTS", "5"))
 LOGIN_WINDOW_MIN = int(os.environ.get("XRAY_LOGIN_WINDOW_MIN", "10"))
 LOGIN_LOCK_MIN = int(os.environ.get("XRAY_LOGIN_LOCK_MIN", "15"))
 AUTO_CHECK_DEFAULT_INTERVAL = int(os.environ.get("XRAY_AUTO_CHECK_INTERVAL", "30"))
+DEFAULT_SUB_INTERVAL_MIN = int(os.environ.get("XRAY_DEFAULT_SUB_INTERVAL_MIN", "60"))
 
 DB_PATH = os.path.join(DATA_DIR, "data.db")
 
@@ -299,6 +300,82 @@ def _set_setting(key: str, value: str):
         conn.close()
 
 
+def _get_default_sub_interval() -> int:
+    try:
+        value = _get_setting("default_sub_interval_min", str(DEFAULT_SUB_INTERVAL_MIN))
+        return int(value)
+    except Exception:
+        return DEFAULT_SUB_INTERVAL_MIN
+
+
+def _get_due_subscriptions(now: datetime) -> list[sqlite3.Row]:
+    conn = _db()
+    try:
+        cur = conn.execute(
+            """
+            SELECT id, owner, name, url, type, enabled, interval_min, last_fetch_at, last_status, last_error
+            FROM subscriptions
+            WHERE enabled=1
+            """
+        )
+        rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    due = []
+    for row in rows:
+        interval = row["interval_min"] or _get_default_sub_interval()
+        last_fetch = row["last_fetch_at"]
+        if not last_fetch:
+            due.append(row)
+            continue
+        try:
+            last_dt = datetime.strptime(last_fetch, "%Y-%m-%d %H:%M:%S")
+            if now >= last_dt + timedelta(minutes=int(interval)):
+                due.append(row)
+        except Exception:
+            due.append(row)
+    return due
+
+
+def _update_subscription_status(sub_id: str, status: str, error: str | None = None):
+    conn = _db()
+    try:
+        conn.execute(
+            "UPDATE subscriptions SET last_fetch_at=?, last_status=?, last_error=? WHERE id=?",
+            (_now_str(), status, error or "", sub_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _subscription_fetch_loop():
+    while True:
+        time.sleep(30)
+        now = datetime.now()
+        for sub in _get_due_subscriptions(now):
+            try:
+                content = _fetch_subscription(sub["url"])
+                links = _parse_subscription_content(content)
+                added = 0
+                skipped = 0
+                for link in links:
+                    try:
+                        node = parse_node(link)
+                        node_id = _node_id(link)
+                        if _find_node_by_id(sub["owner"], node_id):
+                            skipped += 1
+                            continue
+                        _upsert_node(sub["owner"], node.get("type", "other"), link)
+                        added += 1
+                    except Exception:
+                        continue
+                _update_subscription_status(sub["id"], "ok", "")
+            except Exception as e:
+                _update_subscription_status(sub["id"], "fail", str(e))
+
+
 def _ensure_user_settings(username: str):
     conn = _db()
     try:
@@ -513,6 +590,11 @@ def _parse_subscription_content(content: str) -> list[str]:
     if not content:
         return []
 
+    # clash yaml (priority)
+    links = _parse_clash_yaml(content)
+    if links:
+        return links
+
     # plain text
     links = _extract_links(content)
     if links:
@@ -527,11 +609,7 @@ def _parse_subscription_content(content: str) -> list[str]:
     except Exception:
         pass
 
-    # clash yaml
-    links = _parse_clash_yaml(content)
-    if links:
-        return links
-
+    # sing-box stub (optional)
     return []
 
 
@@ -1291,6 +1369,8 @@ def on_startup():
     _ensure_user_settings(ADMIN_USER)
     t = threading.Thread(target=_auto_check_loop, daemon=True)
     t.start()
+    s = threading.Thread(target=_subscription_fetch_loop, daemon=True)
+    s.start()
 
 
 @app.middleware("http")
