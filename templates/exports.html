@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>导出规则 - Xray 节点检测系统</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="page">
+    <header class="header modern">
+      <div class="brand-block">
+        <div class="brand-pill">EXPORT RULES</div>
+        <h1>自建订阅导出</h1>
+        <div class="sub">创建多个订阅输出，按 OR 规则筛选优质节点</div>
+      </div>
+      <div class="status modern">
+        <div class="user-line">当前用户：<strong>{{ username }}</strong></div>
+        <div class="header-actions">
+          <a class="btn" href="/">检测首页</a>
+          <a class="btn" href="/subscriptions">订阅管理</a>
+          {% if role == 'admin' %}
+            <a class="btn" href="/admin">管理员后台</a>
+          {% endif %}
+          <form method="post" action="/api/logout" class="inline">
+            <button type="submit" class="ghost">退出登录</button>
+          </form>
+        </div>
+      </div>
+    </header>
+
+    <section class="card split">
+      <div class="split-col">
+        <h2>创建导出规则</h2>
+        <form id="export-create-form" class="grid-form">
+          <label>规则名称</label>
+          <input type="text" id="export-name" placeholder="例如：高速订阅" required />
+          <label>输出格式</label>
+          <select id="export-format">
+            <option value="clash">clash</option>
+            <option value="base64">base64</option>
+            <option value="raw">raw</option>
+            <option value="singbox">singbox</option>
+          </select>
+          <label>启用状态</label>
+          <select id="export-enabled">
+            <option value="1">启用</option>
+            <option value="0">禁用</option>
+          </select>
+          <label>规则 JSON（高级，可选）</label>
+          <textarea id="export-rules-json" placeholder='[{"type":"success_rate","op":">=","value":80}]'></textarea>
+          <button type="submit">创建规则</button>
+        </form>
+        <div class="hint" id="export-create-result"></div>
+      </div>
+
+      <div class="split-col">
+        <h2>OR 规则编辑器（基础）</h2>
+        <div class="row-actions">
+          <select id="rule-type">
+            <option value="success_rate">成功率</option>
+            <option value="latency">延迟</option>
+            <option value="recent_successes">最近成功次数</option>
+            <option value="success_in_last_minutes">最近成功时间(分钟)</option>
+          </select>
+          <select id="rule-op">
+            <option value=">=">>=</option>
+            <option value=">">></option>
+            <option value="<="><=</option>
+            <option value="<"><</option>
+            <option value="==">==</option>
+          </select>
+          <input type="text" id="rule-value" placeholder="值" />
+          <button id="rule-add-btn">添加规则</button>
+        </div>
+        <div class="hint">规则之间为 OR 关系（满足其一即可）</div>
+        <div id="rule-list" class="rule-list"></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>规则列表（{{ items|length }}）</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>名称</th>
+              <th>格式</th>
+              <th>启用</th>
+              <th>规则</th>
+              <th>订阅链接</th>
+              <th>创建时间</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for r in items %}
+            <tr data-rule-id="{{ r.id }}" data-name="{{ r.name|e }}" data-format="{{ r.format }}" data-enabled="{{ r.enabled }}" data-rules-json="{{ r.rules_json|e }}" data-token="{{ r.token }}">
+              <td>{{ r.name }}</td>
+              <td>{{ r.format }}</td>
+              <td>{{ '是' if r.enabled == 1 else '否' }}</td>
+              <td class="mono wrap">{{ r.rules_json }}</td>
+              <td class="mono wrap">{{ base_url }}/sub/{{ r.token }}?format={{ r.format }}</td>
+              <td class="mono">{{ r.created_at }}</td>
+              <td class="actions">
+                <button class="export-copy-btn" data-url="{{ base_url }}/sub/{{ r.token }}?format={{ r.format }}">复制链接</button>
+                <button class="export-edit-btn" data-id="{{ r.id }}">编辑</button>
+                <button class="export-del-btn" data-id="{{ r.id }}">删除</button>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

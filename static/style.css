@@ -243,6 +243,32 @@ tbody td {
   font-size: 13px;
 }
 
+.grid-form {
+  display: grid;
+  gap: 8px;
+}
+
+.wrap {
+  word-break: break-all;
+}
+
+.rule-list {
+  margin-top: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.rule-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
 .inline {
   display: inline-block;
   margin-top: 8px;

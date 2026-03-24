@@ -1793,6 +1793,241 @@ def import_subscription(request: Request, urls: str = Form(...)):
     }
 
 
+@app.get("/subscriptions", response_class=HTMLResponse)
+def subscriptions_page(request: Request):
+    conn = _db()
+    try:
+        rows = conn.execute(
+            """
+            SELECT id, name, url, type, enabled, interval_min, last_fetch_at, last_status, last_error
+            FROM subscriptions
+            WHERE owner=?
+            ORDER BY name ASC
+            """,
+            (request.state.user,),
+        ).fetchall()
+    finally:
+        conn.close()
+    return templates.TemplateResponse(
+        "subscriptions.html",
+        {
+            "request": request,
+            "items": [dict(r) for r in rows],
+            "username": request.state.user,
+            "role": request.state.role,
+        },
+    )
+
+
+@app.get("/api/subscriptions")
+def list_subscriptions(request: Request):
+    conn = _db()
+    try:
+        rows = conn.execute(
+            """
+            SELECT id, name, url, type, enabled, interval_min, last_fetch_at, last_status, last_error
+            FROM subscriptions
+            WHERE owner=?
+            ORDER BY name ASC
+            """,
+            (request.state.user,),
+        ).fetchall()
+    finally:
+        conn.close()
+    return {"success": True, "items": [dict(r) for r in rows]}
+
+
+@app.post("/api/subscriptions")
+def create_subscription(
+    request: Request,
+    name: str = Form(...),
+    url: str = Form(...),
+    type: str = Form("auto"),
+    enabled: int = Form(1),
+    interval_min: int | None = Form(None),
+):
+    sub_id = uuid.uuid4().hex
+    clean_name = (name or "").strip()
+    clean_url = (url or "").strip()
+    clean_type = (type or "auto").strip().lower() or "auto"
+    if not clean_name or not clean_url:
+        raise HTTPException(status_code=400, detail="name/url required")
+    interval = None
+    if interval_min is not None:
+        interval = int(interval_min)
+        if interval < 1:
+            interval = 1
+    conn = _db()
+    try:
+        conn.execute(
+            """
+            INSERT INTO subscriptions (id, owner, name, url, type, enabled, interval_min, last_fetch_at, last_status, last_error)
+            VALUES (?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                sub_id,
+                request.state.user,
+                clean_name,
+                clean_url,
+                clean_type,
+                1 if int(enabled) == 1 else 0,
+                interval,
+                None,
+                "",
+                "",
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return {"success": True, "id": sub_id}
+
+
+@app.put("/api/subscriptions/{sub_id}")
+def update_subscription(
+    request: Request,
+    sub_id: str,
+    name: str = Form(""),
+    url: str = Form(""),
+    type: str = Form(""),
+    enabled: int | None = Form(None),
+    interval_min: int | None = Form(None),
+):
+    updates = []
+    params = []
+    if name.strip():
+        updates.append("name=?")
+        params.append(name.strip())
+    if url.strip():
+        updates.append("url=?")
+        params.append(url.strip())
+    if type.strip():
+        updates.append("type=?")
+        params.append(type.strip().lower())
+    if enabled is not None:
+        updates.append("enabled=?")
+        params.append(1 if int(enabled) == 1 else 0)
+    if interval_min is not None:
+        value = int(interval_min)
+        if value < 1:
+            value = 1
+        updates.append("interval_min=?")
+        params.append(value)
+    if not updates:
+        return {"success": True}
+    params.extend([request.state.user, sub_id])
+    conn = _db()
+    try:
+        conn.execute(
+            f"UPDATE subscriptions SET {', '.join(updates)} WHERE owner=? AND id=?",
+            params,
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return {"success": True}
+
+
+@app.delete("/api/subscriptions/{sub_id}")
+def delete_subscription(request: Request, sub_id: str):
+    conn = _db()
+    try:
+        conn.execute(
+            "DELETE FROM subscriptions WHERE owner=? AND id=?",
+            (request.state.user, sub_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return {"success": True}
+
+
+def _pull_subscription_once(owner: str, sub: sqlite3.Row) -> dict:
+    content = _fetch_subscription(sub["url"])
+    links = _parse_subscription_content(content)
+    added = 0
+    skipped = 0
+    for link in links:
+        try:
+            node = parse_node(link)
+            node_id = _node_id(link)
+            # Blacklisted nodes are intentionally not re-imported automatically.
+            existing = _find_node_by_id(owner, node_id)
+            if existing:
+                conn = _db()
+                try:
+                    row = conn.execute(
+                        "SELECT disabled_reason FROM nodes WHERE owner=? AND id=?",
+                        (owner, node_id),
+                    ).fetchone()
+                finally:
+                    conn.close()
+                if row and (row["disabled_reason"] or "") == "blacklist":
+                    skipped += 1
+                    continue
+                skipped += 1
+                continue
+            _upsert_node(owner, node.get("type", "other"), link)
+            added += 1
+        except Exception:
+            continue
+    return {"added": added, "skipped": skipped, "total": len(links)}
+
+
+@app.post("/api/subscriptions/{sub_id}/pull")
+def pull_subscription(request: Request, sub_id: str):
+    conn = _db()
+    try:
+        sub = conn.execute(
+            """
+            SELECT id, owner, name, url, type, enabled, interval_min, last_fetch_at, last_status, last_error
+            FROM subscriptions
+            WHERE owner=? AND id=?
+            """,
+            (request.state.user, sub_id),
+        ).fetchone()
+    finally:
+        conn.close()
+    if not sub:
+        raise HTTPException(status_code=404, detail="subscription not found")
+
+    try:
+        res = _pull_subscription_once(request.state.user, sub)
+        _update_subscription_status(sub_id, "ok", "")
+        return {"success": True, **res}
+    except Exception as e:
+        _update_subscription_status(sub_id, "fail", str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/exports", response_class=HTMLResponse)
+def exports_page(request: Request):
+    conn = _db()
+    try:
+        rows = conn.execute(
+            """
+            SELECT id, name, token, format, enabled, rules_json, created_at
+            FROM export_rules
+            WHERE owner=?
+            ORDER BY created_at DESC
+            """,
+            (request.state.user,),
+        ).fetchall()
+    finally:
+        conn.close()
+    base = str(request.base_url).rstrip("/")
+    return templates.TemplateResponse(
+        "exports.html",
+        {
+            "request": request,
+            "items": [dict(r) for r in rows],
+            "base_url": base,
+            "username": request.state.user,
+            "role": request.state.role,
+        },
+    )
+
+
 @app.get("/api/export-rules")
 def list_export_rules(request: Request):
     conn = _db()

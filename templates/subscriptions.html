@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>订阅管理 - Xray 节点检测系统</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="page">
+    <header class="header modern">
+      <div class="brand-block">
+        <div class="brand-pill">SUBSCRIPTIONS</div>
+        <h1>订阅管理</h1>
+        <div class="sub">管理你的订阅源，支持定时拉取与手动拉取</div>
+      </div>
+      <div class="status modern">
+        <div class="user-line">当前用户：<strong>{{ username }}</strong></div>
+        <div class="header-actions">
+          <a class="btn" href="/">检测首页</a>
+          <a class="btn" href="/exports">导出规则</a>
+          {% if role == 'admin' %}
+            <a class="btn" href="/admin">管理员后台</a>
+          {% endif %}
+          <form method="post" action="/api/logout" class="inline">
+            <button type="submit" class="ghost">退出登录</button>
+          </form>
+        </div>
+      </div>
+    </header>
+
+    <section class="card">
+      <h2>新增订阅</h2>
+      <form id="sub-create-form" class="grid-form">
+        <label>名称</label>
+        <input type="text" id="sub-name" placeholder="例如：机场A主订阅" required />
+        <label>订阅地址</label>
+        <input type="text" id="sub-url" placeholder="https://example.com/sub" required />
+        <label>类型</label>
+        <select id="sub-type">
+          <option value="auto">自动识别</option>
+          <option value="clash">Clash</option>
+          <option value="raw">Raw</option>
+          <option value="base64">Base64</option>
+        </select>
+        <label>拉取间隔（分钟，可空表示使用全局默认）</label>
+        <input type="text" id="sub-interval" placeholder="例如 60" />
+        <label>启用状态</label>
+        <select id="sub-enabled">
+          <option value="1">启用</option>
+          <option value="0">禁用</option>
+        </select>
+        <button type="submit">创建订阅</button>
+      </form>
+      <div class="hint" id="sub-create-result"></div>
+    </section>
+
+    <section class="card">
+      <h2>订阅列表（{{ items|length }}）</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>名称</th>
+              <th>类型</th>
+              <th>地址</th>
+              <th>启用</th>
+              <th>间隔(分)</th>
+              <th>上次拉取</th>
+              <th>状态</th>
+              <th>错误</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for s in items %}
+            <tr data-sub-id="{{ s.id }}" data-name="{{ s.name|e }}" data-url="{{ s.url|e }}" data-type="{{ s.type }}" data-enabled="{{ s.enabled }}" data-interval="{{ s.interval_min or '' }}">
+              <td>{{ s.name }}</td>
+              <td>{{ s.type }}</td>
+              <td class="mono wrap">{{ s.url }}</td>
+              <td>{{ '是' if s.enabled == 1 else '否' }}</td>
+              <td>{{ s.interval_min or '默认' }}</td>
+              <td class="mono">{{ s.last_fetch_at or '-' }}</td>
+              <td>{{ s.last_status or '-' }}</td>
+              <td class="mono wrap">{{ s.last_error or '-' }}</td>
+              <td class="actions">
+                <button class="sub-edit-btn" data-id="{{ s.id }}">编辑</button>
+                <button class="sub-toggle-btn" data-id="{{ s.id }}" data-enabled="{{ s.enabled }}">{{ '禁用' if s.enabled == 1 else '启用' }}</button>
+                <button class="sub-pull-btn" data-id="{{ s.id }}">立即拉取</button>
+                <button class="sub-del-btn" data-id="{{ s.id }}">删除</button>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
