@@ -157,10 +157,22 @@ def _init_db():
                 latency_ms INTEGER,
                 error TEXT,
                 checked_at TEXT,
+                consecutive_fail INTEGER DEFAULT 0,
                 PRIMARY KEY (owner, node_id)
             )
             """
         )
+        # add blacklist fields to nodes if not exists
+        if not _column_exists(conn, "nodes", "disabled"):
+            conn.execute("ALTER TABLE nodes ADD COLUMN disabled INTEGER DEFAULT 0")
+        if not _column_exists(conn, "nodes", "disabled_reason"):
+            conn.execute("ALTER TABLE nodes ADD COLUMN disabled_reason TEXT")
+        if not _column_exists(conn, "nodes", "blacklist_until"):
+            conn.execute("ALTER TABLE nodes ADD COLUMN blacklist_until TEXT")
+
+        # add status counters
+        if not _column_exists(conn, "node_status", "consecutive_fail"):
+            conn.execute("ALTER TABLE node_status ADD COLUMN consecutive_fail INTEGER DEFAULT 0")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS settings (
@@ -1098,25 +1110,51 @@ def _delete_node(owner: str, node_id: str):
 def _update_status(owner: str, node_id: str, result: dict):
     conn = _db()
     try:
+        success = bool(result.get("success"))
+        # read current consecutive_fail
+        row = conn.execute(
+            "SELECT consecutive_fail FROM node_status WHERE owner=? AND node_id=?",
+            (owner, node_id),
+        ).fetchone()
+        current_fail = row["consecutive_fail"] if row else 0
+        if success:
+            new_fail = 0
+        else:
+            new_fail = int(current_fail) + 1
+
         conn.execute(
             """
-            INSERT INTO node_status (node_id, owner, status, latency_ms, error, checked_at)
-            VALUES (?,?,?,?,?,?)
+            INSERT INTO node_status (node_id, owner, status, latency_ms, error, checked_at, consecutive_fail)
+            VALUES (?,?,?,?,?,?,?)
             ON CONFLICT(owner, node_id) DO UPDATE SET
                 status=excluded.status,
                 latency_ms=excluded.latency_ms,
                 error=excluded.error,
-                checked_at=excluded.checked_at
+                checked_at=excluded.checked_at,
+                consecutive_fail=excluded.consecutive_fail
             """,
             (
                 node_id,
                 owner,
-                "ok" if result.get("success") else "fail",
+                "ok" if success else "fail",
                 result.get("latency_ms"),
                 result.get("error", ""),
                 _now_str(),
+                new_fail,
             )
         )
+
+        if not success and new_fail >= 3:
+            blacklist_until = (datetime.now() + timedelta(days=3)).strftime("%Y-%m-%d %H:%M:%S")
+            conn.execute(
+                """
+                UPDATE nodes
+                SET disabled=1, disabled_reason='blacklist', blacklist_until=?
+                WHERE owner=? AND id=?
+                """,
+                (blacklist_until, owner, node_id),
+            )
+
         conn.commit()
     finally:
         conn.close()
