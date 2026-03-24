@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>黑名单管理 - 管理员后台</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="page">
+    <header class="header modern">
+      <div class="brand-block">
+        <div class="brand-pill">ADMIN BLACKLIST</div>
+        <h1>黑名单管理</h1>
+        <div class="sub">手动恢复被自动拉黑的节点</div>
+      </div>
+      <div class="status modern">
+        <div class="header-actions">
+          <a class="btn" href="/admin">返回管理员后台</a>
+          <a class="btn" href="/">返回首页</a>
+        </div>
+      </div>
+    </header>
+
+    <section class="card">
+      <h2>系统默认订阅拉取间隔（分钟）</h2>
+      <form id="admin-default-sub-interval-form">
+        <input type="text" id="default-sub-interval" value="{{ default_sub_interval_min }}" placeholder="例如 60" required />
+        <button type="submit">保存默认间隔</button>
+      </form>
+      <div class="hint" id="admin-default-sub-interval-result"></div>
+    </section>
+
+    <section class="card">
+      <h2>黑名单节点（{{ items|length }}）</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>用户</th>
+              <th>节点ID</th>
+              <th>类型</th>
+              <th>状态</th>
+              <th>连续失败</th>
+              <th>黑名单截止</th>
+              <th>最近检测</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+          {% for item in items %}
+            <tr>
+              <td class="mono">{{ item.owner }}</td>
+              <td class="mono">{{ item.node_id }}</td>
+              <td>{{ item.type }}</td>
+              <td>{{ item.status or '-' }}</td>
+              <td>{{ item.consecutive_fail or 0 }}</td>
+              <td class="mono">{{ item.blacklist_until or '-' }}</td>
+              <td class="mono">{{ item.checked_at or '-' }}</td>
+              <td>
+                <button
+                  class="admin-restore-blacklist-btn"
+                  data-owner="{{ item.owner }}"
+                  data-node-id="{{ item.node_id }}"
+                >恢复节点</button>
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

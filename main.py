@@ -2439,6 +2439,76 @@ def admin_page(request: Request):
     )
 
 
+@app.get("/admin/blacklist", response_class=HTMLResponse)
+def admin_blacklist_page(request: Request):
+    _require_admin(request)
+    conn = _db()
+    try:
+        rows = conn.execute(
+            """
+            SELECT n.owner, n.id AS node_id, n.type, n.raw, n.disabled, n.disabled_reason, n.blacklist_until,
+                   s.status, s.latency_ms, s.checked_at, s.consecutive_fail
+            FROM nodes n
+            LEFT JOIN node_status s
+              ON s.owner = n.owner AND s.node_id = n.id
+            WHERE n.disabled = 1 AND n.disabled_reason = 'blacklist'
+            ORDER BY n.blacklist_until DESC, n.owner ASC
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+
+    return templates.TemplateResponse(
+        "admin_blacklist.html",
+        {
+            "request": request,
+            "items": [dict(r) for r in rows],
+            "default_sub_interval_min": _get_default_sub_interval(),
+        },
+    )
+
+
+@app.post("/api/admin/blacklist/{owner}/{node_id}/restore")
+def admin_restore_blacklist_node(request: Request, owner: str, node_id: str):
+    _require_admin(request)
+    conn = _db()
+    try:
+        conn.execute(
+            """
+            UPDATE nodes
+            SET disabled = 0,
+                disabled_reason = NULL,
+                blacklist_until = NULL
+            WHERE owner = ? AND id = ?
+            """,
+            (owner, node_id),
+        )
+        conn.execute(
+            """
+            UPDATE node_status
+            SET consecutive_fail = 0
+            WHERE owner = ? AND node_id = ?
+            """,
+            (owner, node_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return {"success": True}
+
+
+@app.post("/api/admin/settings/default-sub-interval")
+def admin_set_default_sub_interval(request: Request, interval_min: int = Form(...)):
+    _require_admin(request)
+    value = int(interval_min)
+    if value < 1:
+        value = 1
+    if value > 525600:
+        value = 525600
+    _set_setting("default_sub_interval_min", str(value))
+    return {"success": True, "default_sub_interval_min": value}
+
+
 @app.post("/api/admin/users")
 def admin_create_user(request: Request, username: str = Form(...), password: str = Form(...), role: str = Form("user")):
     _require_admin(request)

@@ -202,6 +202,34 @@ for (const btn of document.querySelectorAll('.admin-delete-btn')) {
     location.reload();
   });
 }
+
+for (const btn of document.querySelectorAll('.admin-restore-blacklist-btn')) {
+  btn.addEventListener('click', async () => {
+    const owner = btn.dataset.owner;
+    const nodeId = btn.dataset.nodeId;
+    if (!owner || !nodeId) return;
+    if (!confirm(`确认恢复用户 ${owner} 的节点 ${nodeId} 吗？`)) return;
+    await api(`/api/admin/blacklist/${encodeURIComponent(owner)}/${encodeURIComponent(nodeId)}/restore`, { method: 'POST' });
+    location.reload();
+  });
+}
+
+const adminDefaultSubIntervalForm = document.getElementById('admin-default-sub-interval-form');
+if (adminDefaultSubIntervalForm) {
+  adminDefaultSubIntervalForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const value = document.getElementById('default-sub-interval').value.trim();
+    const interval = parseInt(value, 10);
+    if (!interval || interval < 1) {
+      alert('请输入有效的分钟数');
+      return;
+    }
+    const body = new URLSearchParams({ interval_min: interval.toString() });
+    const res = await api('/api/admin/settings/default-sub-interval', { method: 'POST', body });
+    const el = document.getElementById('admin-default-sub-interval-result');
+    if (el) el.textContent = `已保存，当前默认间隔：${res.default_sub_interval_min} 分钟`;
+  });
+}
 for (const btn of document.querySelectorAll('.test-btn')) {
   btn.addEventListener('click', async () => {
     const id = btn.dataset.id;
