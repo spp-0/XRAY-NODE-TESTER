@@ -13,6 +13,7 @@ import threading
 import time
 import urllib.parse
 import urllib.request
+import uuid
 from datetime import datetime, timedelta
 
 from fastapi import FastAPI, Form, HTTPException, Request
@@ -475,6 +476,10 @@ def _b64decode(data: str) -> str:
 
 def _b64encode(data: str) -> str:
     return base64.urlsafe_b64encode(data.encode("utf-8")).decode("utf-8").rstrip("=")
+
+
+def _std_b64encode(data: str) -> str:
+    return base64.b64encode(data.encode("utf-8")).decode("utf-8")
 
 
 def _extract_links(text: str) -> list[str]:
@@ -1414,7 +1419,7 @@ def on_startup():
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
     path = request.url.path
-    if path.startswith("/static") or path in ("/login", "/api/login"):
+    if path.startswith("/static") or path.startswith("/sub/") or path in ("/login", "/api/login"):
         return await call_next(request)
 
     token = request.cookies.get("xray_session")
@@ -1786,6 +1791,335 @@ def import_subscription(request: Request, urls: str = Form(...)):
         "errors": errors,
         "failed_urls": failed_urls,
     }
+
+
+@app.get("/api/export-rules")
+def list_export_rules(request: Request):
+    conn = _db()
+    try:
+        rows = conn.execute(
+            """
+            SELECT id, name, token, format, enabled, rules_json, created_at
+            FROM export_rules
+            WHERE owner=?
+            ORDER BY created_at DESC
+            """,
+            (request.state.user,),
+        ).fetchall()
+    finally:
+        conn.close()
+    return {"success": True, "items": [dict(r) for r in rows]}
+
+
+@app.post("/api/export-rules")
+def create_export_rule(
+    request: Request,
+    name: str = Form(...),
+    format: str = Form("clash"),
+    enabled: int = Form(1),
+    rules_json: str = Form("[]"),
+):
+    fmt = (format or "clash").strip().lower()
+    if fmt not in ("clash", "raw", "base64", "singbox"):
+        raise HTTPException(status_code=400, detail="invalid format")
+    # Validate JSON shape (list of objects)
+    rules = _parse_rules_json(rules_json)
+    rid = uuid.uuid4().hex
+    token = secrets.token_urlsafe(24)
+    conn = _db()
+    try:
+        conn.execute(
+            """
+            INSERT INTO export_rules (id, owner, name, token, format, enabled, rules_json, created_at)
+            VALUES (?,?,?,?,?,?,?,?)
+            """,
+            (rid, request.state.user, name.strip(), token, fmt, 1 if int(enabled) == 1 else 0, json.dumps(rules, ensure_ascii=False), _now_str()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return {"success": True, "id": rid, "token": token}
+
+
+@app.put("/api/export-rules/{rule_id}")
+def update_export_rule(
+    request: Request,
+    rule_id: str,
+    name: str = Form(""),
+    format: str = Form(""),
+    enabled: int | None = Form(None),
+    rules_json: str | None = Form(None),
+):
+    updates = []
+    params = []
+    if name.strip():
+        updates.append("name=?")
+        params.append(name.strip())
+    if format.strip():
+        fmt = format.strip().lower()
+        if fmt not in ("clash", "raw", "base64", "singbox"):
+            raise HTTPException(status_code=400, detail="invalid format")
+        updates.append("format=?")
+        params.append(fmt)
+    if enabled is not None:
+        updates.append("enabled=?")
+        params.append(1 if int(enabled) == 1 else 0)
+    if rules_json is not None:
+        rules = _parse_rules_json(rules_json)
+        updates.append("rules_json=?")
+        params.append(json.dumps(rules, ensure_ascii=False))
+
+    if not updates:
+        return {"success": True}
+
+    params.extend([request.state.user, rule_id])
+    conn = _db()
+    try:
+        conn.execute(
+            f"UPDATE export_rules SET {', '.join(updates)} WHERE owner=? AND id=?",
+            params,
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return {"success": True}
+
+
+@app.delete("/api/export-rules/{rule_id}")
+def delete_export_rule(request: Request, rule_id: str):
+    conn = _db()
+    try:
+        conn.execute(
+            "DELETE FROM export_rules WHERE owner=? AND id=?",
+            (request.state.user, rule_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return {"success": True}
+
+
+@app.get("/sub/{token}")
+def public_subscription(token: str, format: str | None = None):
+    conn = _db()
+    try:
+        rule = conn.execute(
+            """
+            SELECT owner, format, enabled, rules_json
+            FROM export_rules
+            WHERE token=?
+            LIMIT 1
+            """,
+            (token,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    if not rule or int(rule["enabled"] or 0) != 1:
+        raise HTTPException(status_code=404, detail="subscription not found")
+
+    fmt = (format or rule["format"] or "clash").strip().lower()
+    if fmt not in ("clash", "raw", "base64", "singbox"):
+        raise HTTPException(status_code=400, detail="invalid format")
+
+    rules = _parse_rules_json(rule["rules_json"] or "[]")
+    links = _collect_export_links(rule["owner"], rules)
+
+    if fmt == "clash":
+        return PlainTextResponse(_render_clash(links), media_type="text/yaml; charset=utf-8")
+    if fmt == "raw":
+        return PlainTextResponse(_render_raw(links), media_type="text/plain; charset=utf-8")
+    if fmt == "base64":
+        return PlainTextResponse(_render_base64(links), media_type="text/plain; charset=utf-8")
+    return PlainTextResponse(_render_singbox(links), media_type="application/json; charset=utf-8")
+
+
+def _parse_rules_json(raw: str) -> list[dict]:
+    try:
+        data = json.loads(raw or "[]")
+    except Exception:
+        return []
+    if isinstance(data, list):
+        return [r for r in data if isinstance(r, dict)]
+    return []
+
+
+def _to_float(val, default=0.0):
+    try:
+        return float(val)
+    except Exception:
+        return default
+
+
+def _compare(left: float, op: str, right: float) -> bool:
+    if op == ">":
+        return left > right
+    if op == ">=":
+        return left >= right
+    if op == "<":
+        return left < right
+    if op == "<=":
+        return left <= right
+    if op == "==":
+        return left == right
+    return False
+
+
+def _minutes_from_now(ts: str) -> float | None:
+    if not ts:
+        return None
+    try:
+        dt = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return None
+    return (datetime.now() - dt).total_seconds() / 60.0
+
+
+def _apply_export_rules(node: dict, rules: list[dict]) -> bool:
+    # OR semantics: any rule passes means include.
+    if not rules:
+        return True
+    for rule in rules:
+        rtype = str(rule.get("type", "")).strip().lower()
+        op = str(rule.get("op", ">=")).strip()
+        value = _to_float(rule.get("value", 0), 0.0)
+
+        if rtype in ("success_rate", "rate"):
+            left = _to_float(node.get("success_rate", 0), 0.0)
+            if _compare(left, op, value):
+                return True
+            continue
+
+        if rtype in ("latency", "avg_latency"):
+            left = _to_float(node.get("avg_latency", 999999), 999999)
+            if _compare(left, op, value):
+                return True
+            continue
+
+        if rtype in ("recent_successes", "recent_success"):
+            left = _to_float(node.get("recent_successes", 0), 0.0)
+            if _compare(left, op, value):
+                return True
+            continue
+
+        if rtype in ("success_in_last_minutes", "recent_ok_minutes"):
+            # Rule means: at least one success happened within N minutes.
+            if node.get("status") == "ok":
+                minutes = _minutes_from_now(node.get("checked_at", "")) or 999999
+                if minutes <= value:
+                    return True
+            continue
+
+    return False
+
+
+def _collect_export_links(owner: str, rules: list[dict]) -> list[str]:
+    conn = _db()
+    try:
+        rows = conn.execute(
+            """
+            SELECT n.raw, n.type, n.id, n.disabled, n.disabled_reason,
+                   s.status, s.latency_ms, s.checked_at
+            FROM nodes n
+            LEFT JOIN node_status s ON s.owner=n.owner AND s.node_id=n.id
+            WHERE n.owner=?
+            ORDER BY n.created_at DESC
+            """,
+            (owner,),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    links = []
+    for r in rows:
+        if int(r["disabled"] or 0) == 1:
+            continue
+        node = {
+            "status": r["status"] or "",
+            "checked_at": r["checked_at"] or "",
+            "avg_latency": r["latency_ms"] if r["latency_ms"] is not None else 999999,
+            "success_rate": 100 if (r["status"] == "ok") else 0,
+            "recent_successes": 1 if (r["status"] == "ok") else 0,
+        }
+        if _apply_export_rules(node, rules):
+            links.append(r["raw"])
+    return links
+
+
+def _render_raw(links: list[str]) -> str:
+    return "\n".join(links) + ("\n" if links else "")
+
+
+def _render_base64(links: list[str]) -> str:
+    return _std_b64encode(_render_raw(links))
+
+
+def _render_clash(links: list[str]) -> str:
+    proxies = []
+    idx = 0
+    for raw in links:
+        try:
+            n = parse_node(raw)
+        except Exception:
+            continue
+        idx += 1
+        name = n.get("name") or f"node-{idx}"
+        ptype = n.get("type")
+        if ptype == "ss":
+            proxies.append(
+                {
+                    "name": name,
+                    "type": "ss",
+                    "server": n.get("address"),
+                    "port": int(n.get("port") or 0),
+                    "cipher": n.get("method") or "aes-128-gcm",
+                    "password": n.get("password") or "",
+                }
+            )
+        elif ptype == "trojan":
+            proxies.append(
+                {
+                    "name": name,
+                    "type": "trojan",
+                    "server": n.get("address"),
+                    "port": int(n.get("port") or 0),
+                    "password": n.get("password") or "",
+                    "sni": n.get("sni") or "",
+                }
+            )
+        elif ptype in ("vmess", "vless"):
+            item = {
+                "name": name,
+                "type": ptype,
+                "server": n.get("address"),
+                "port": int(n.get("port") or 0),
+                "uuid": n.get("uuid") or "",
+                "network": n.get("net") or "tcp",
+                "tls": True if (n.get("tls") == "tls" or n.get("security") == "tls") else False,
+            }
+            if ptype == "vmess":
+                item["alterId"] = int(n.get("aid") or 0)
+            proxies.append(item)
+
+    try:
+        import yaml  # type: ignore
+
+        names = [p["name"] for p in proxies]
+        data = {
+            "proxies": proxies,
+            "proxy-groups": [{"name": "AUTO", "type": "select", "proxies": names}],
+            "rules": ["MATCH,AUTO"],
+        }
+        return yaml.safe_dump(data, sort_keys=False, allow_unicode=True)
+    except Exception:
+        # fallback raw format if YAML unavailable
+        return _render_raw(links)
+
+
+def _render_singbox(links: list[str]) -> str:
+    # Minimal sing-box-compatible stub payload with raw links attached.
+    data = {"version": 1, "links": links}
+    return json.dumps(data, ensure_ascii=False)
 
 
 @app.get("/api/export/txt")
