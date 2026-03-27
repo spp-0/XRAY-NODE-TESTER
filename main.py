@@ -479,59 +479,119 @@ def _init_db():
                 )
                 """
             )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS login_attempts (
-                ip TEXT NOT NULL,
-                username TEXT NOT NULL,
-                failed_count INTEGER NOT NULL,
-                first_failed_at TEXT NOT NULL,
-                last_failed_at TEXT NOT NULL,
-                locked_until TEXT,
-                PRIMARY KEY (ip, username)
+
+        if DB_DRIVER == "mysql":
+            from db_compat import execute as db_execute
+
+            db_execute(
+                conn,
+                """
+                CREATE TABLE IF NOT EXISTS login_attempts (
+                    username VARCHAR(64) PRIMARY KEY,
+                    count INT NOT NULL,
+                    first_at VARCHAR(32) NOT NULL,
+                    locked_until VARCHAR(32)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+                """,
             )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS user_settings (
-                username TEXT PRIMARY KEY,
-                auto_check_enabled INTEGER NOT NULL,
-                interval_min INTEGER NOT NULL,
-                next_run_at TEXT
+            db_execute(
+                conn,
+                """
+                CREATE TABLE IF NOT EXISTS user_settings (
+                    username VARCHAR(64) PRIMARY KEY,
+                    auto_check_enabled TINYINT DEFAULT 0,
+                    auto_check_value INT DEFAULT 30,
+                    auto_check_unit VARCHAR(16) DEFAULT 'minute',
+                    auto_blacklist_enabled TINYINT DEFAULT 1,
+                    sub_auto_pull_enabled TINYINT DEFAULT 0,
+                    sub_auto_pull_interval_min INT DEFAULT 60,
+                    created_at VARCHAR(32) NOT NULL
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+                """,
             )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS subscriptions (
-                id TEXT PRIMARY KEY,
-                owner TEXT NOT NULL,
-                name TEXT NOT NULL,
-                url TEXT NOT NULL,
-                type TEXT NOT NULL,
-                enabled INTEGER NOT NULL,
-                interval_min INTEGER,
-                last_fetch_at TEXT,
-                last_status TEXT,
-                last_error TEXT
+            db_execute(
+                conn,
+                """
+                CREATE TABLE IF NOT EXISTS subscriptions (
+                    id VARCHAR(64) PRIMARY KEY,
+                    owner VARCHAR(64) NOT NULL,
+                    name VARCHAR(255),
+                    url LONGTEXT NOT NULL,
+                    enabled TINYINT DEFAULT 1,
+                    interval_min INT DEFAULT 60,
+                    last_pulled_at VARCHAR(32),
+                    next_pull_at VARCHAR(32),
+                    created_at VARCHAR(32) NOT NULL
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+                """,
             )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS export_rules (
-                id TEXT PRIMARY KEY,
-                owner TEXT NOT NULL,
-                name TEXT NOT NULL,
-                token TEXT NOT NULL,
-                format TEXT NOT NULL,
-                enabled INTEGER NOT NULL,
-                rules_json TEXT NOT NULL,
-                created_at TEXT NOT NULL
+            db_execute(
+                conn,
+                """
+                CREATE TABLE IF NOT EXISTS export_rules (
+                    id VARCHAR(64) PRIMARY KEY,
+                    owner VARCHAR(64) NOT NULL,
+                    name VARCHAR(255) NOT NULL,
+                    token VARCHAR(128) NOT NULL,
+                    rules_json LONGTEXT NOT NULL,
+                    created_at VARCHAR(32) NOT NULL
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+                """,
             )
-            """
-        )
+        else:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS login_attempts (
+                    ip TEXT NOT NULL,
+                    username TEXT NOT NULL,
+                    failed_count INTEGER NOT NULL,
+                    first_failed_at TEXT NOT NULL,
+                    last_failed_at TEXT NOT NULL,
+                    locked_until TEXT,
+                    PRIMARY KEY (ip, username)
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS user_settings (
+                    username TEXT PRIMARY KEY,
+                    auto_check_enabled INTEGER NOT NULL,
+                    interval_min INTEGER NOT NULL,
+                    next_run_at TEXT
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS subscriptions (
+                    id TEXT PRIMARY KEY,
+                    owner TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    url TEXT NOT NULL,
+                    type TEXT NOT NULL,
+                    enabled INTEGER NOT NULL,
+                    interval_min INTEGER,
+                    last_fetch_at TEXT,
+                    last_status TEXT,
+                    last_error TEXT
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS export_rules (
+                    id TEXT PRIMARY KEY,
+                    owner TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    token TEXT NOT NULL,
+                    format TEXT NOT NULL,
+                    enabled INTEGER NOT NULL,
+                    rules_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
         _migrate_schema(conn)
         conn.commit()
     finally:
