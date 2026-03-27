@@ -415,33 +415,70 @@ def _init_db():
             conn.execute("ALTER TABLE node_status ADD COLUMN ip_proxy TEXT")
         if not _column_exists(conn, "node_status", "ip_checked_at"):
             conn.execute("ALTER TABLE node_status ADD COLUMN ip_checked_at TEXT")
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY,
-                value TEXT
+
+        if DB_DRIVER == "mysql":
+            from db_compat import execute as db_execute
+
+            db_execute(
+                conn,
+                """
+                CREATE TABLE IF NOT EXISTS settings (
+                    k VARCHAR(128) PRIMARY KEY,
+                    v LONGTEXT
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+                """,
             )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS users (
-                username TEXT PRIMARY KEY,
-                password_hash TEXT NOT NULL,
-                role TEXT NOT NULL,
-                created_at TEXT NOT NULL
+            db_execute(
+                conn,
+                """
+                CREATE TABLE IF NOT EXISTS users (
+                    username VARCHAR(64) PRIMARY KEY,
+                    password_hash VARCHAR(128) NOT NULL,
+                    role VARCHAR(16) NOT NULL,
+                    created_at VARCHAR(32) NOT NULL
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+                """,
             )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS sessions (
-                token TEXT PRIMARY KEY,
-                username TEXT NOT NULL,
-                expires_at TEXT NOT NULL
+            db_execute(
+                conn,
+                """
+                CREATE TABLE IF NOT EXISTS sessions (
+                    token VARCHAR(128) PRIMARY KEY,
+                    username VARCHAR(64) NOT NULL,
+                    created_at VARCHAR(32) NOT NULL,
+                    expires_at VARCHAR(32) NOT NULL
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+                """,
             )
-            """
-        )
+            conn.commit()
+        else:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS users (
+                    username TEXT PRIMARY KEY,
+                    password_hash TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS sessions (
+                    token TEXT PRIMARY KEY,
+                    username TEXT NOT NULL,
+                    expires_at TEXT NOT NULL
+                )
+                """
+            )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS login_attempts (
