@@ -216,127 +216,136 @@ def _init_db():
 
         # ---- base tables ----
         if DB_DRIVER == "mysql":
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS nodes (
-                        id VARCHAR(64) NOT NULL,
-                        owner VARCHAR(64) NOT NULL,
-                        type VARCHAR(32) NOT NULL,
-                        raw LONGTEXT NOT NULL,
-                        created_at VARCHAR(32) NOT NULL,
-                        disabled TINYINT DEFAULT 0,
-                        disabled_reason VARCHAR(64),
-                        blacklist_until VARCHAR(32),
-                        PRIMARY KEY (owner, id)
-                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-                    """
-                )
-                cur.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS node_status (
-                        node_id VARCHAR(64) NOT NULL,
-                        owner VARCHAR(64) NOT NULL,
-                        status VARCHAR(32),
-                        latency_ms INT,
-                        error TEXT,
-                        checked_at VARCHAR(32),
-                        exit_ip VARCHAR(64),
-                        ip_country VARCHAR(64),
-                        ip_region VARCHAR(64),
-                        ip_city VARCHAR(64),
-                        ip_asn VARCHAR(64),
-                        ip_org VARCHAR(255),
-                        ip_risk INT,
-                        ip_type VARCHAR(64),
-                        ip_proxy VARCHAR(64),
-                        ip_checked_at VARCHAR(32),
-                        consecutive_fail INT DEFAULT 0,
-                        PRIMARY KEY (owner, node_id)
-                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-                    """
-                )
+            from db_compat import execute as db_execute
 
-                cur.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS settings (
-                        k VARCHAR(128) PRIMARY KEY,
-                        v LONGTEXT
-                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-                    """
-                )
-                cur.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS users (
-                        username VARCHAR(64) PRIMARY KEY,
-                        password_hash VARCHAR(128) NOT NULL,
-                        role VARCHAR(16) NOT NULL,
-                        created_at VARCHAR(32) NOT NULL
-                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-                    """
-                )
-                cur.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS sessions (
-                        token VARCHAR(128) PRIMARY KEY,
-                        username VARCHAR(64) NOT NULL,
-                        created_at VARCHAR(32) NOT NULL,
-                        expires_at VARCHAR(32) NOT NULL
-                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-                    """
-                )
-                cur.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS login_attempts (
-                        username VARCHAR(64) PRIMARY KEY,
-                        count INT NOT NULL,
-                        first_at VARCHAR(32) NOT NULL,
-                        locked_until VARCHAR(32)
-                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-                    """
-                )
-                cur.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS user_settings (
-                        username VARCHAR(64) PRIMARY KEY,
-                        auto_check_enabled TINYINT DEFAULT 0,
-                        auto_check_value INT DEFAULT 30,
-                        auto_check_unit VARCHAR(16) DEFAULT 'minute',
-                        auto_blacklist_enabled TINYINT DEFAULT 1,
-                        sub_auto_pull_enabled TINYINT DEFAULT 0,
-                        sub_auto_pull_interval_min INT DEFAULT 60,
-                        created_at VARCHAR(32) NOT NULL
-                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-                    """
-                )
-                cur.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS subscriptions (
-                        id VARCHAR(64) PRIMARY KEY,
-                        owner VARCHAR(64) NOT NULL,
-                        name VARCHAR(255),
-                        url LONGTEXT NOT NULL,
-                        enabled TINYINT DEFAULT 1,
-                        interval_min INT DEFAULT 60,
-                        last_pulled_at VARCHAR(32),
-                        next_pull_at VARCHAR(32),
-                        created_at VARCHAR(32) NOT NULL
-                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-                    """
-                )
-                cur.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS export_rules (
-                        id VARCHAR(64) PRIMARY KEY,
-                        owner VARCHAR(64) NOT NULL,
-                        name VARCHAR(255) NOT NULL,
-                        token VARCHAR(128) NOT NULL,
-                        rules_json LONGTEXT NOT NULL,
-                        created_at VARCHAR(32) NOT NULL
-                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-                    """
-                )
-                conn.commit()
+            db_execute(
+                conn,
+                """
+                CREATE TABLE IF NOT EXISTS nodes (
+                    id VARCHAR(64) NOT NULL,
+                    owner VARCHAR(64) NOT NULL,
+                    type VARCHAR(32) NOT NULL,
+                    raw LONGTEXT NOT NULL,
+                    created_at VARCHAR(32) NOT NULL,
+                    disabled TINYINT DEFAULT 0,
+                    disabled_reason VARCHAR(64),
+                    blacklist_until VARCHAR(32),
+                    PRIMARY KEY (owner, id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+                """,
+            )
+            db_execute(
+                conn,
+                """
+                CREATE TABLE IF NOT EXISTS node_status (
+                    node_id VARCHAR(64) NOT NULL,
+                    owner VARCHAR(64) NOT NULL,
+                    status VARCHAR(32),
+                    latency_ms INT,
+                    error TEXT,
+                    checked_at VARCHAR(32),
+                    exit_ip VARCHAR(64),
+                    ip_country VARCHAR(64),
+                    ip_region VARCHAR(64),
+                    ip_city VARCHAR(64),
+                    ip_asn VARCHAR(64),
+                    ip_org VARCHAR(255),
+                    ip_risk INT,
+                    ip_type VARCHAR(64),
+                    ip_proxy VARCHAR(64),
+                    ip_checked_at VARCHAR(32),
+                    consecutive_fail INT DEFAULT 0,
+                    PRIMARY KEY (owner, node_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+                """,
+            )
+            db_execute(
+                conn,
+                """
+                CREATE TABLE IF NOT EXISTS settings (
+                    k VARCHAR(128) PRIMARY KEY,
+                    v LONGTEXT
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+                """,
+            )
+            db_execute(
+                conn,
+                """
+                CREATE TABLE IF NOT EXISTS users (
+                    username VARCHAR(64) PRIMARY KEY,
+                    password_hash VARCHAR(128) NOT NULL,
+                    role VARCHAR(16) NOT NULL,
+                    created_at VARCHAR(32) NOT NULL
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+                """,
+            )
+            db_execute(
+                conn,
+                """
+                CREATE TABLE IF NOT EXISTS sessions (
+                    token VARCHAR(128) PRIMARY KEY,
+                    username VARCHAR(64) NOT NULL,
+                    created_at VARCHAR(32) NOT NULL,
+                    expires_at VARCHAR(32) NOT NULL
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+                """,
+            )
+            db_execute(
+                conn,
+                """
+                CREATE TABLE IF NOT EXISTS login_attempts (
+                    username VARCHAR(64) PRIMARY KEY,
+                    count INT NOT NULL,
+                    first_at VARCHAR(32) NOT NULL,
+                    locked_until VARCHAR(32)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+                """,
+            )
+            db_execute(
+                conn,
+                """
+                CREATE TABLE IF NOT EXISTS user_settings (
+                    username VARCHAR(64) PRIMARY KEY,
+                    auto_check_enabled TINYINT DEFAULT 0,
+                    auto_check_value INT DEFAULT 30,
+                    auto_check_unit VARCHAR(16) DEFAULT 'minute',
+                    auto_blacklist_enabled TINYINT DEFAULT 1,
+                    sub_auto_pull_enabled TINYINT DEFAULT 0,
+                    sub_auto_pull_interval_min INT DEFAULT 60,
+                    created_at VARCHAR(32) NOT NULL
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+                """,
+            )
+            db_execute(
+                conn,
+                """
+                CREATE TABLE IF NOT EXISTS subscriptions (
+                    id VARCHAR(64) PRIMARY KEY,
+                    owner VARCHAR(64) NOT NULL,
+                    name VARCHAR(255),
+                    url LONGTEXT NOT NULL,
+                    enabled TINYINT DEFAULT 1,
+                    interval_min INT DEFAULT 60,
+                    last_pulled_at VARCHAR(32),
+                    next_pull_at VARCHAR(32),
+                    created_at VARCHAR(32) NOT NULL
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+                """,
+            )
+            db_execute(
+                conn,
+                """
+                CREATE TABLE IF NOT EXISTS export_rules (
+                    id VARCHAR(64) PRIMARY KEY,
+                    owner VARCHAR(64) NOT NULL,
+                    name VARCHAR(255) NOT NULL,
+                    token VARCHAR(128) NOT NULL,
+                    rules_json LONGTEXT NOT NULL,
+                    created_at VARCHAR(32) NOT NULL
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+                """,
+            )
+            conn.commit()
         else:
             conn.execute(
                 """
