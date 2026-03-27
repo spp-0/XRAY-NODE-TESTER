@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env bash
+#!/bin/bash
 set -euo pipefail
 
 DATA_DIR="${XRAY_WEB_DATA_DIR:-/data/xray1}"
