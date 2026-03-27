@@ -31,7 +31,10 @@ PY
     DOWNLOAD_URL=$(python - <<PY
 import json, sys
 arch_tag = "$ARCH_TAG"
-obj = json.loads(sys.stdin.read())
+raw = sys.stdin.read().strip()
+if not raw:
+    sys.exit(0)
+obj = json.loads(raw)
 assets = obj.get("assets", [])
 want = f"Xray-linux-{arch_tag}.zip"
 for a in assets:
@@ -39,7 +42,10 @@ for a in assets:
         print(a.get("browser_download_url"))
         break
 PY
-<<<"$API_JSON")
+<<EOF
+$API_JSON
+EOF
+)
   fi
 
   if [ -z "$DOWNLOAD_URL" ]; then
