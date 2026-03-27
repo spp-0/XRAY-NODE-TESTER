@@ -21,11 +21,11 @@ RUN apt-get update \
 
 WORKDIR /app
 
-COPY app/ /app/
+COPY . /app/
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
-RUN pip install --no-cache-dir -U fastapi uvicorn[standard] jinja2 python-multipart pyyaml
+RUN pip install --no-cache-dir -U fastapi uvicorn[standard] jinja2 python-multipart pyyaml sqlalchemy pymysql
 
 VOLUME ["/data/xray1"]
 

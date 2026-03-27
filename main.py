@@ -17,10 +17,18 @@ import urllib.request
 import uuid
 from datetime import datetime, timedelta
 
+# Optional MySQL support (enabled via DB_DRIVER=mysql)
+try:
+    import pymysql  # type: ignore
+except Exception:  # pragma: no cover
+    pymysql = None
+
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+
+import db_compat
 
 DATA_DIR = os.environ.get("XRAY_WEB_DATA_DIR", "/data/xray1")
 VMESS_FILE = os.path.join(DATA_DIR, "vmess.txt")
@@ -48,7 +56,14 @@ LOGIN_LOCK_MIN = int(os.environ.get("XRAY_LOGIN_LOCK_MIN", "15"))
 AUTO_CHECK_DEFAULT_INTERVAL = int(os.environ.get("XRAY_AUTO_CHECK_INTERVAL", "30"))
 DEFAULT_SUB_INTERVAL_MIN = int(os.environ.get("XRAY_DEFAULT_SUB_INTERVAL_MIN", "60"))
 
+DB_DRIVER = os.environ.get("DB_DRIVER", "sqlite").strip().lower()  # sqlite | mysql
 DB_PATH = os.path.join(DATA_DIR, "data.db")
+
+MYSQL_HOST = os.environ.get("MYSQL_HOST", "mysql")
+MYSQL_PORT = int(os.environ.get("MYSQL_PORT", "3306"))
+MYSQL_DB = os.environ.get("MYSQL_DB", "xray_web")
+MYSQL_USER = os.environ.get("MYSQL_USER", "xray")
+MYSQL_PASSWORD = os.environ.get("MYSQL_PASSWORD", "xray")
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -81,12 +96,47 @@ def _get_status(username: str) -> dict:
 
 
 def _db():
+    """Return a DB connection.
+
+    - sqlite: returns sqlite3.Connection (row_factory=sqlite3.Row)
+    - mysql: returns pymysql.Connection (cursorclass=DictCursor)
+
+    MySQL is enabled via env: DB_DRIVER=mysql and MYSQL_* vars.
+    """
+    if DB_DRIVER == "mysql":
+        if pymysql is None:
+            raise RuntimeError("pymysql is not installed (required for DB_DRIVER=mysql)")
+        conn = pymysql.connect(
+            host=MYSQL_HOST,
+            port=MYSQL_PORT,
+            user=MYSQL_USER,
+            password=MYSQL_PASSWORD,
+            database=MYSQL_DB,
+            charset="utf8mb4",
+            autocommit=False,
+            cursorclass=pymysql.cursors.DictCursor,
+        )
+        return conn
+
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
 
 
 def _column_exists(conn, table: str, column: str) -> bool:
+    if DB_DRIVER == "mysql":
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT COUNT(*) AS cnt
+                FROM information_schema.columns
+                WHERE table_schema=%s AND table_name=%s AND column_name=%s
+                """,
+                (MYSQL_DB, table, column),
+            )
+            row = cur.fetchone() or {}
+            return int(row.get("cnt", 0)) > 0
+
     cur = conn.execute(f"PRAGMA table_info({table})")
     cols = [r["name"] for r in cur.fetchall()]
     return column in cols
@@ -149,75 +199,209 @@ def _migrate_schema(conn):
 
 
 def _init_db():
+    """Initialize DB schema.
+
+    sqlite: create/open DATA_DIR/data.db and use WAL.
+    mysql: connect to MySQL and create tables if missing.
+    """
     os.makedirs(DATA_DIR, exist_ok=True)
-    if not os.path.exists(DB_PATH):
-        open(DB_PATH, "a", encoding="utf-8").close()
+    if DB_DRIVER != "mysql":
+        if not os.path.exists(DB_PATH):
+            open(DB_PATH, "a", encoding="utf-8").close()
+
     conn = _db()
     try:
-        conn.execute("PRAGMA journal_mode=WAL;")
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS nodes (
-                id TEXT NOT NULL,
-                owner TEXT NOT NULL,
-                type TEXT NOT NULL,
-                raw TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                PRIMARY KEY (owner, id)
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS node_status (
-                node_id TEXT NOT NULL,
-                owner TEXT NOT NULL,
-                status TEXT,
-                latency_ms INTEGER,
-                error TEXT,
-                checked_at TEXT,
-                exit_ip TEXT,
-                ip_country TEXT,
-                ip_region TEXT,
-                ip_city TEXT,
-                ip_asn TEXT,
-                ip_org TEXT,
-                ip_risk INTEGER,
-                ip_type TEXT,
-                ip_proxy TEXT,
-                ip_checked_at TEXT,
-                consecutive_fail INTEGER DEFAULT 0,
-                PRIMARY KEY (owner, node_id)
-            )
-            """
-        )
-        # add blacklist fields to nodes if not exists
-        if not _column_exists(conn, "nodes", "disabled"):
-            conn.execute("ALTER TABLE nodes ADD COLUMN disabled INTEGER DEFAULT 0")
-        if not _column_exists(conn, "nodes", "disabled_reason"):
-            conn.execute("ALTER TABLE nodes ADD COLUMN disabled_reason TEXT")
-        if not _column_exists(conn, "nodes", "blacklist_until"):
-            conn.execute("ALTER TABLE nodes ADD COLUMN blacklist_until TEXT")
+        if DB_DRIVER != "mysql":
+            conn.execute("PRAGMA journal_mode=WAL;")
 
-        # add status counters
-        if not _column_exists(conn, "node_status", "consecutive_fail"):
-            conn.execute("ALTER TABLE node_status ADD COLUMN consecutive_fail INTEGER DEFAULT 0")
-        if not _column_exists(conn, "node_status", "exit_ip"):
-            conn.execute("ALTER TABLE node_status ADD COLUMN exit_ip TEXT")
-        if not _column_exists(conn, "node_status", "ip_country"):
-            conn.execute("ALTER TABLE node_status ADD COLUMN ip_country TEXT")
-        if not _column_exists(conn, "node_status", "ip_region"):
-            conn.execute("ALTER TABLE node_status ADD COLUMN ip_region TEXT")
-        if not _column_exists(conn, "node_status", "ip_city"):
-            conn.execute("ALTER TABLE node_status ADD COLUMN ip_city TEXT")
-        if not _column_exists(conn, "node_status", "ip_asn"):
-            conn.execute("ALTER TABLE node_status ADD COLUMN ip_asn TEXT")
-        if not _column_exists(conn, "node_status", "ip_org"):
-            conn.execute("ALTER TABLE node_status ADD COLUMN ip_org TEXT")
-        if not _column_exists(conn, "node_status", "ip_risk"):
-            conn.execute("ALTER TABLE node_status ADD COLUMN ip_risk INTEGER")
-        if not _column_exists(conn, "node_status", "ip_type"):
-            conn.execute("ALTER TABLE node_status ADD COLUMN ip_type TEXT")
+        # ---- base tables ----
+        if DB_DRIVER == "mysql":
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS nodes (
+                        id VARCHAR(64) NOT NULL,
+                        owner VARCHAR(64) NOT NULL,
+                        type VARCHAR(32) NOT NULL,
+                        raw LONGTEXT NOT NULL,
+                        created_at VARCHAR(32) NOT NULL,
+                        disabled TINYINT DEFAULT 0,
+                        disabled_reason VARCHAR(64),
+                        blacklist_until VARCHAR(32),
+                        PRIMARY KEY (owner, id)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS node_status (
+                        node_id VARCHAR(64) NOT NULL,
+                        owner VARCHAR(64) NOT NULL,
+                        status VARCHAR(32),
+                        latency_ms INT,
+                        error TEXT,
+                        checked_at VARCHAR(32),
+                        exit_ip VARCHAR(64),
+                        ip_country VARCHAR(64),
+                        ip_region VARCHAR(64),
+                        ip_city VARCHAR(64),
+                        ip_asn VARCHAR(64),
+                        ip_org VARCHAR(255),
+                        ip_risk INT,
+                        ip_type VARCHAR(64),
+                        ip_proxy VARCHAR(64),
+                        ip_checked_at VARCHAR(32),
+                        consecutive_fail INT DEFAULT 0,
+                        PRIMARY KEY (owner, node_id)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+                    """
+                )
+
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS settings (
+                        k VARCHAR(128) PRIMARY KEY,
+                        v LONGTEXT
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS users (
+                        username VARCHAR(64) PRIMARY KEY,
+                        password_hash VARCHAR(128) NOT NULL,
+                        role VARCHAR(16) NOT NULL,
+                        created_at VARCHAR(32) NOT NULL
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS sessions (
+                        token VARCHAR(128) PRIMARY KEY,
+                        username VARCHAR(64) NOT NULL,
+                        created_at VARCHAR(32) NOT NULL,
+                        expires_at VARCHAR(32) NOT NULL
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS login_attempts (
+                        username VARCHAR(64) PRIMARY KEY,
+                        count INT NOT NULL,
+                        first_at VARCHAR(32) NOT NULL,
+                        locked_until VARCHAR(32)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS user_settings (
+                        username VARCHAR(64) PRIMARY KEY,
+                        auto_check_enabled TINYINT DEFAULT 0,
+                        auto_check_value INT DEFAULT 30,
+                        auto_check_unit VARCHAR(16) DEFAULT 'minute',
+                        auto_blacklist_enabled TINYINT DEFAULT 1,
+                        sub_auto_pull_enabled TINYINT DEFAULT 0,
+                        sub_auto_pull_interval_min INT DEFAULT 60,
+                        created_at VARCHAR(32) NOT NULL
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS subscriptions (
+                        id VARCHAR(64) PRIMARY KEY,
+                        owner VARCHAR(64) NOT NULL,
+                        name VARCHAR(255),
+                        url LONGTEXT NOT NULL,
+                        enabled TINYINT DEFAULT 1,
+                        interval_min INT DEFAULT 60,
+                        last_pulled_at VARCHAR(32),
+                        next_pull_at VARCHAR(32),
+                        created_at VARCHAR(32) NOT NULL
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS export_rules (
+                        id VARCHAR(64) PRIMARY KEY,
+                        owner VARCHAR(64) NOT NULL,
+                        name VARCHAR(255) NOT NULL,
+                        token VARCHAR(128) NOT NULL,
+                        rules_json LONGTEXT NOT NULL,
+                        created_at VARCHAR(32) NOT NULL
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+                    """
+                )
+                conn.commit()
+        else:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS nodes (
+                    id TEXT NOT NULL,
+                    owner TEXT NOT NULL,
+                    type TEXT NOT NULL,
+                    raw TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY (owner, id)
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS node_status (
+                    node_id TEXT NOT NULL,
+                    owner TEXT NOT NULL,
+                    status TEXT,
+                    latency_ms INTEGER,
+                    error TEXT,
+                    checked_at TEXT,
+                    exit_ip TEXT,
+                    ip_country TEXT,
+                    ip_region TEXT,
+                    ip_city TEXT,
+                    ip_asn TEXT,
+                    ip_org TEXT,
+                    ip_risk INTEGER,
+                    ip_type TEXT,
+                    ip_proxy TEXT,
+                    ip_checked_at TEXT,
+                    consecutive_fail INTEGER DEFAULT 0,
+                    PRIMARY KEY (owner, node_id)
+                )
+                """
+            )
+            # add blacklist fields to nodes if not exists
+            if not _column_exists(conn, "nodes", "disabled"):
+                conn.execute("ALTER TABLE nodes ADD COLUMN disabled INTEGER DEFAULT 0")
+            if not _column_exists(conn, "nodes", "disabled_reason"):
+                conn.execute("ALTER TABLE nodes ADD COLUMN disabled_reason TEXT")
+            if not _column_exists(conn, "nodes", "blacklist_until"):
+                conn.execute("ALTER TABLE nodes ADD COLUMN blacklist_until TEXT")
+
+            # add status counters
+            if not _column_exists(conn, "node_status", "consecutive_fail"):
+                conn.execute("ALTER TABLE node_status ADD COLUMN consecutive_fail INTEGER DEFAULT 0")
+            if not _column_exists(conn, "node_status", "exit_ip"):
+                conn.execute("ALTER TABLE node_status ADD COLUMN exit_ip TEXT")
+            if not _column_exists(conn, "node_status", "ip_country"):
+                conn.execute("ALTER TABLE node_status ADD COLUMN ip_country TEXT")
+            if not _column_exists(conn, "node_status", "ip_region"):
+                conn.execute("ALTER TABLE node_status ADD COLUMN ip_region TEXT")
+            if not _column_exists(conn, "node_status", "ip_city"):
+                conn.execute("ALTER TABLE node_status ADD COLUMN ip_city TEXT")
+            if not _column_exists(conn, "node_status", "ip_asn"):
+                conn.execute("ALTER TABLE node_status ADD COLUMN ip_asn TEXT")
+            if not _column_exists(conn, "node_status", "ip_org"):
+                conn.execute("ALTER TABLE node_status ADD COLUMN ip_org TEXT")
+            if not _column_exists(conn, "node_status", "ip_risk"):
+                conn.execute("ALTER TABLE node_status ADD COLUMN ip_risk INTEGER")
+            if not _column_exists(conn, "node_status", "ip_type"):
+                conn.execute("ALTER TABLE node_status ADD COLUMN ip_type TEXT")
+            conn.commit()
         if not _column_exists(conn, "node_status", "ip_proxy"):
             conn.execute("ALTER TABLE node_status ADD COLUMN ip_proxy TEXT")
         if not _column_exists(conn, "node_status", "ip_checked_at"):
@@ -330,8 +514,8 @@ def _ensure_admin():
 def _get_user_role(username: str) -> str:
     conn = _db()
     try:
-        cur = conn.execute("SELECT role FROM users WHERE username=?", (username,))
-        row = cur.fetchone()
+        row = db_compat.query_one(conn, "SELECT role FROM users WHERE username=?", (username,))
+        # sqlite returns sqlite3.Row; mysql returns dict. Both support row["role"] when present.
         return row["role"] if row else "user"
     finally:
         conn.close()
@@ -340,12 +524,11 @@ def _get_user_role(username: str) -> str:
 def _get_setting(key: str, default: str = "") -> str:
     conn = _db()
     try:
-        cur = conn.execute("SELECT value FROM settings WHERE key=?", (key,))
-        row = cur.fetchone()
+        row = db_compat.query_one(conn, "SELECT value FROM settings WHERE key=?", (key,))
         if row:
             return row["value"]
         if default != "":
-            conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)", (key, default))
+            db_compat.execute(conn, "INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)", (key, default))
             conn.commit()
         return default
     finally:
@@ -355,7 +538,7 @@ def _get_setting(key: str, default: str = "") -> str:
 def _set_setting(key: str, value: str):
     conn = _db()
     try:
-        conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)", (key, value))
+        db_compat.execute(conn, "INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)", (key, value))
         conn.commit()
     finally:
         conn.close()
@@ -452,7 +635,7 @@ def _subscription_fetch_loop():
 def _ensure_user_settings(username: str):
     conn = _db()
     try:
-        cur = conn.execute("SELECT username FROM user_settings WHERE username=?", (username,))
+        cur = db_compat.query_one(conn, "SELECT username FROM user_settings WHERE username=?", (username,))
         row = cur.fetchone()
         if not row:
             conn.execute(
@@ -1348,8 +1531,7 @@ def _list_nodes(owner: str, page: int = 1, page_size: int = 20, q: str = "", nty
 def _find_node_by_id(owner: str, node_id: str):
     conn = _db()
     try:
-        cur = conn.execute("SELECT id, type, raw FROM nodes WHERE id=? AND owner=?", (node_id, owner))
-        row = cur.fetchone()
+        row = db_compat.query_one(conn, "SELECT id, type, raw FROM nodes WHERE id=? AND owner=?", (node_id, owner))
         if not row:
             return None
         return {"id": row["id"], "type": row["type"], "raw": row["raw"]}
@@ -1374,8 +1556,8 @@ def _upsert_node(owner: str, node_type: str, raw: str):
 def _delete_node(owner: str, node_id: str):
     conn = _db()
     try:
-        conn.execute("DELETE FROM nodes WHERE id=? AND owner=?", (node_id, owner))
-        conn.execute("DELETE FROM node_status WHERE node_id=? AND owner=?", (node_id, owner))
+        db_compat.execute(conn, "DELETE FROM nodes WHERE id=? AND owner=?", (node_id, owner))
+        db_compat.execute(conn, "DELETE FROM node_status WHERE node_id=? AND owner=?", (node_id, owner))
         conn.commit()
     finally:
         conn.close()
@@ -1501,13 +1683,12 @@ def _get_user_from_session(token: str):
         return None
     conn = _db()
     try:
-        cur = conn.execute("SELECT username, expires_at FROM sessions WHERE token=?", (token,))
-        row = cur.fetchone()
+        row = db_compat.query_one(conn, "SELECT username, expires_at FROM sessions WHERE token=?", (token,))
         if not row:
             return None
         expires_at = datetime.strptime(row["expires_at"], "%Y-%m-%d %H:%M:%S")
         if expires_at < datetime.now():
-            conn.execute("DELETE FROM sessions WHERE token=?", (token,))
+            db_compat.execute(conn, "DELETE FROM sessions WHERE token=?", (token,))
             conn.commit()
             return None
         return row["username"]
@@ -1518,7 +1699,7 @@ def _get_user_from_session(token: str):
 def _delete_session(token: str):
     conn = _db()
     try:
-        conn.execute("DELETE FROM sessions WHERE token=?", (token,))
+        db_compat.execute(conn, "DELETE FROM sessions WHERE token=?", (token,))
         conn.commit()
     finally:
         conn.close()
@@ -1543,7 +1724,7 @@ def _get_login_record(ip: str, username: str):
 def _clear_login_record(ip: str, username: str):
     conn = _db()
     try:
-        conn.execute("DELETE FROM login_attempts WHERE ip=? AND username=?", (ip, username))
+        db_compat.execute(conn, "DELETE FROM login_attempts WHERE ip=? AND username=?", (ip, username))
         conn.commit()
     finally:
         conn.close()
@@ -1755,8 +1936,7 @@ def login(request: Request, username: str = Form(...), password: str = Form(...)
 
     conn = _db()
     try:
-        cur = conn.execute("SELECT password_hash FROM users WHERE username=?", (username,))
-        row = cur.fetchone()
+        row = db_compat.query_one(conn, "SELECT password_hash FROM users WHERE username=?", (username,))
         if not row:
             _record_login_failure(ip, username)
             return templates.TemplateResponse(
@@ -1998,8 +2178,8 @@ def nodes_status(request: Request, ids: str | None = None):
 def delete_all_nodes(request: Request):
     conn = _db()
     try:
-        conn.execute("DELETE FROM nodes WHERE owner=?", (request.state.user,))
-        conn.execute("DELETE FROM node_status WHERE owner=?", (request.state.user,))
+        db_compat.execute(conn, "DELETE FROM nodes WHERE owner=?", (request.state.user,))
+        db_compat.execute(conn, "DELETE FROM node_status WHERE owner=?", (request.state.user,))
         conn.commit()
     finally:
         conn.close()
@@ -2685,8 +2865,8 @@ def _render_singbox(links: list[str]) -> str:
 def export_txt(request: Request):
     conn = _db()
     try:
-        cur = conn.execute("SELECT raw FROM nodes WHERE owner=? ORDER BY created_at DESC", (request.state.user,))
-        lines = [row["raw"] for row in cur.fetchall()]
+        rows = db_compat.query_all(conn, "SELECT raw FROM nodes WHERE owner=? ORDER BY created_at DESC", (request.state.user,))
+        lines = [row["raw"] for row in rows]
     finally:
         conn.close()
 
@@ -2842,10 +3022,11 @@ def admin_create_user(request: Request, username: str = Form(...), password: str
     role = "admin" if role == "admin" else "user"
     conn = _db()
     try:
-        cur = conn.execute("SELECT username FROM users WHERE username=?", (username,))
-        if cur.fetchone():
+        row = db_compat.query_one(conn, "SELECT username FROM users WHERE username=?", (username,))
+        if row:
             raise HTTPException(status_code=400, detail="用户已存在")
-        conn.execute(
+        db_compat.execute(
+            conn,
             "INSERT INTO users (username, password_hash, role, created_at) VALUES (?,?,?,?)",
             (username, _hash_password(password), role, _now_str()),
         )
@@ -2864,8 +3045,8 @@ def admin_reset_password(request: Request, username: str, new_password: str = Fo
         raise HTTPException(status_code=400, detail="密码长度至少 6 位")
     conn = _db()
     try:
-        conn.execute("UPDATE users SET password_hash=? WHERE username=?", (_hash_password(new_password), username))
-        conn.execute("DELETE FROM sessions WHERE username=?", (username,))
+        db_compat.execute(conn, "UPDATE users SET password_hash=? WHERE username=?", (_hash_password(new_password), username))
+        db_compat.execute(conn, "DELETE FROM sessions WHERE username=?", (username,))
         conn.commit()
     finally:
         conn.close()
@@ -2878,7 +3059,7 @@ def admin_update_role(request: Request, username: str, role: str = Form(...)):
     role = "admin" if role == "admin" else "user"
     conn = _db()
     try:
-        conn.execute("UPDATE users SET role=? WHERE username=?", (role, username))
+        db_compat.execute(conn, "UPDATE users SET role=? WHERE username=?", (role, username))
         conn.commit()
     finally:
         conn.close()
@@ -2890,7 +3071,7 @@ def admin_logout_user(request: Request, username: str):
     _require_admin(request)
     conn = _db()
     try:
-        conn.execute("DELETE FROM sessions WHERE username=?", (username,))
+        db_compat.execute(conn, "DELETE FROM sessions WHERE username=?", (username,))
         conn.commit()
     finally:
         conn.close()
@@ -2904,12 +3085,12 @@ def admin_delete_user(request: Request, username: str):
         raise HTTPException(status_code=400, detail="不能删除当前登录用户")
     conn = _db()
     try:
-        conn.execute("DELETE FROM users WHERE username=?", (username,))
-        conn.execute("DELETE FROM sessions WHERE username=?", (username,))
-        conn.execute("DELETE FROM nodes WHERE owner=?", (username,))
-        conn.execute("DELETE FROM node_status WHERE owner=?", (username,))
-        conn.execute("DELETE FROM user_settings WHERE username=?", (username,))
-        conn.execute("DELETE FROM login_attempts WHERE username=?", (username,))
+        db_compat.execute(conn, "DELETE FROM users WHERE username=?", (username,))
+        db_compat.execute(conn, "DELETE FROM sessions WHERE username=?", (username,))
+        db_compat.execute(conn, "DELETE FROM nodes WHERE owner=?", (username,))
+        db_compat.execute(conn, "DELETE FROM node_status WHERE owner=?", (username,))
+        db_compat.execute(conn, "DELETE FROM user_settings WHERE username=?", (username,))
+        db_compat.execute(conn, "DELETE FROM login_attempts WHERE username=?", (username,))
         conn.commit()
     finally:
         conn.close()
@@ -2947,15 +3128,15 @@ def change_password(
     username = request.state.user
     conn = _db()
     try:
-        cur = conn.execute("SELECT password_hash FROM users WHERE username=?", (username,))
-        row = cur.fetchone()
+        row = db_compat.query_one(conn, "SELECT password_hash FROM users WHERE username=?", (username,))
         if not row or _hash_password(old_password) != row["password_hash"]:
             raise HTTPException(status_code=401, detail="原密码错误")
-        conn.execute(
+        db_compat.execute(
+            conn,
             "UPDATE users SET password_hash=? WHERE username=?",
             (_hash_password(new_password), username),
         )
-        conn.execute("DELETE FROM sessions WHERE username=?", (username,))
+        db_compat.execute(conn, "DELETE FROM sessions WHERE username=?", (username,))
         conn.commit()
     finally:
         conn.close()
