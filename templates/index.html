@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8" />
@@ -142,6 +142,8 @@
               <th>TLS</th>
               <th>状态</th>
               <th>延迟</th>
+              <th>出口IP</th>
+              <th>IP信息</th>
               <th>检测时间</th>
               <th>操作</th>
             </tr>
@@ -157,6 +159,12 @@
               <td>{{ n.tls or n.security or '' }}</td>
               <td class="status-{{ n.status }} status-cell">{{ n.status or '' }}</td>
               <td class="mono latency-cell">{{ n.latency_ms or '' }}</td>
+              <td class="mono exit-ip-cell">{{ n.exit_ip or '' }}</td>
+              <td class="mono ip-info-cell">
+                {% if n.ip_country or n.ip_org %}
+                  {{ n.ip_country or '-' }} | {{ n.ip_org or '-' }}
+                {% endif %}
+              </td>
               <td class="mono checked-cell">{{ n.checked_at or '' }}</td>
               <td class="actions">
                 <button class="test-btn" data-id="{{ n.id }}">测试</button>
@@ -185,3 +193,5 @@
 <script src="/static/app.js"></script>
 </body>
 </html>
+
+

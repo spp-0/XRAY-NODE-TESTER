@@ -1,8 +1,9 @@
-﻿import base64
+import base64
 import concurrent.futures
 import hashlib
 import json
 import os
+import re
 import secrets
 import shutil
 import socket
@@ -29,6 +30,13 @@ TEST_URL_DEFAULT = os.environ.get("XRAY_TEST_URL", "https://www.google.com/gener
 MAX_WORKERS = int(os.environ.get("XRAY_TEST_WORKERS", "8"))
 CONNECT_TIMEOUT = int(os.environ.get("XRAY_TEST_TIMEOUT", "6"))
 CURL_BIN = os.environ.get("CURL_BIN", "curl")
+IP_ECHO_URL = os.environ.get("XRAY_IP_ECHO_URL", "https://api.ipify.org?format=json")
+IP_CHECK_API = os.environ.get("XRAY_IP_CHECK_API", "https://ipcheck.ing/api/ipchecking")
+IP_CHECK_TIMEOUT = int(os.environ.get("XRAY_IP_CHECK_TIMEOUT", "10"))
+IP_FALLBACK_API = os.environ.get("XRAY_IP_FALLBACK_API", "http://ip-api.com/json")
+IP_FALLBACK_APIS = [u.strip().rstrip("/") for u in os.environ.get("XRAY_IP_FALLBACK_APIS", "").split(",") if u.strip()]
+if not IP_FALLBACK_APIS:
+    IP_FALLBACK_APIS = [IP_FALLBACK_API.rstrip("/")]
 
 ADMIN_USER = os.environ.get("XRAY_ADMIN_USER", "admin")
 ADMIN_PASS = os.environ.get("XRAY_ADMIN_PASS", "admin123")
@@ -118,6 +126,16 @@ def _migrate_schema(conn):
                 latency_ms INTEGER,
                 error TEXT,
                 checked_at TEXT,
+                exit_ip TEXT,
+                ip_country TEXT,
+                ip_region TEXT,
+                ip_city TEXT,
+                ip_asn TEXT,
+                ip_org TEXT,
+                ip_risk INTEGER,
+                ip_type TEXT,
+                ip_proxy TEXT,
+                ip_checked_at TEXT,
                 PRIMARY KEY (owner, node_id)
             )
             """
@@ -158,6 +176,16 @@ def _init_db():
                 latency_ms INTEGER,
                 error TEXT,
                 checked_at TEXT,
+                exit_ip TEXT,
+                ip_country TEXT,
+                ip_region TEXT,
+                ip_city TEXT,
+                ip_asn TEXT,
+                ip_org TEXT,
+                ip_risk INTEGER,
+                ip_type TEXT,
+                ip_proxy TEXT,
+                ip_checked_at TEXT,
                 consecutive_fail INTEGER DEFAULT 0,
                 PRIMARY KEY (owner, node_id)
             )
@@ -174,6 +202,26 @@ def _init_db():
         # add status counters
         if not _column_exists(conn, "node_status", "consecutive_fail"):
             conn.execute("ALTER TABLE node_status ADD COLUMN consecutive_fail INTEGER DEFAULT 0")
+        if not _column_exists(conn, "node_status", "exit_ip"):
+            conn.execute("ALTER TABLE node_status ADD COLUMN exit_ip TEXT")
+        if not _column_exists(conn, "node_status", "ip_country"):
+            conn.execute("ALTER TABLE node_status ADD COLUMN ip_country TEXT")
+        if not _column_exists(conn, "node_status", "ip_region"):
+            conn.execute("ALTER TABLE node_status ADD COLUMN ip_region TEXT")
+        if not _column_exists(conn, "node_status", "ip_city"):
+            conn.execute("ALTER TABLE node_status ADD COLUMN ip_city TEXT")
+        if not _column_exists(conn, "node_status", "ip_asn"):
+            conn.execute("ALTER TABLE node_status ADD COLUMN ip_asn TEXT")
+        if not _column_exists(conn, "node_status", "ip_org"):
+            conn.execute("ALTER TABLE node_status ADD COLUMN ip_org TEXT")
+        if not _column_exists(conn, "node_status", "ip_risk"):
+            conn.execute("ALTER TABLE node_status ADD COLUMN ip_risk INTEGER")
+        if not _column_exists(conn, "node_status", "ip_type"):
+            conn.execute("ALTER TABLE node_status ADD COLUMN ip_type TEXT")
+        if not _column_exists(conn, "node_status", "ip_proxy"):
+            conn.execute("ALTER TABLE node_status ADD COLUMN ip_proxy TEXT")
+        if not _column_exists(conn, "node_status", "ip_checked_at"):
+            conn.execute("ALTER TABLE node_status ADD COLUMN ip_checked_at TEXT")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS settings (
@@ -912,6 +960,199 @@ def _pick_free_port():
     return port
 
 
+def _extract_ip_from_response(text: str) -> str:
+    raw = (text or "").strip()
+    if not raw:
+        return ""
+
+    try:
+        obj = json.loads(raw)
+        if isinstance(obj, dict):
+            for key in ("ip", "query", "address"):
+                val = obj.get(key)
+                if isinstance(val, str) and val.strip():
+                    return val.strip()
+    except Exception:
+        pass
+
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        m4 = re.search(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", line)
+        if m4:
+            return m4.group(0)
+        m6 = re.search(r"\b[0-9a-fA-F:]{3,}\b", line)
+        if m6 and ":" in m6.group(0):
+            return m6.group(0)
+        if len(line) <= 64:
+            return line
+    return ""
+
+
+def _parse_ipcheck_payload(payload: dict) -> dict:
+    if not isinstance(payload, dict):
+        return {}
+    proxy = payload.get("proxyDetect")
+    if not isinstance(proxy, dict):
+        proxy = {}
+
+    risk = proxy.get("risk")
+    try:
+        risk = int(risk) if risk is not None else None
+    except Exception:
+        risk = None
+
+    proxy_flag = proxy.get("proxy")
+    if isinstance(proxy_flag, bool):
+        proxy_flag = "true" if proxy_flag else "false"
+    elif proxy_flag is not None:
+        proxy_flag = str(proxy_flag)
+
+    return {
+        "exit_ip": str(payload.get("ip") or "").strip(),
+        "ip_country": str(payload.get("country_code") or payload.get("countryCode") or "").strip(),
+        "ip_region": str(payload.get("region") or "").strip(),
+        "ip_city": str(payload.get("city") or "").strip(),
+        "ip_asn": str(payload.get("asn") or "").strip(),
+        "ip_org": str(payload.get("org") or payload.get("isp") or "").strip(),
+        "ip_risk": risk,
+        "ip_type": str(proxy.get("type") or "").strip(),
+        "ip_proxy": str(proxy_flag or "").strip(),
+    }
+
+
+
+def _parse_ipapi_payload(payload: dict) -> dict:
+    if not isinstance(payload, dict):
+        return {}
+    if str(payload.get("status") or "").lower() != "success":
+        return {}
+
+    proxy_flag = payload.get("proxy")
+    if isinstance(proxy_flag, bool):
+        proxy_flag = "true" if proxy_flag else "false"
+    elif proxy_flag is not None:
+        proxy_flag = str(proxy_flag)
+
+    return {
+        "exit_ip": str(payload.get("query") or payload.get("ip") or "").strip(),
+        "ip_country": str(payload.get("countryCode") or payload.get("country_code") or "").strip(),
+        "ip_region": str(payload.get("regionName") or payload.get("region") or "").strip(),
+        "ip_city": str(payload.get("city") or "").strip(),
+        "ip_asn": str(payload.get("as") or payload.get("asn") or "").strip(),
+        "ip_org": str(payload.get("isp") or payload.get("org") or "").strip(),
+        "ip_risk": None,
+        "ip_type": "",
+        "ip_proxy": str(proxy_flag or "").strip(),
+    }
+
+
+def _merge_ip_info(primary: dict, fallback: dict) -> dict:
+    out = {}
+    if isinstance(primary, dict):
+        out.update(primary)
+    if isinstance(fallback, dict):
+        for key, value in fallback.items():
+            if key not in out:
+                out[key] = value
+                continue
+            cur = out.get(key)
+            if cur is None:
+                out[key] = value
+                continue
+            if isinstance(cur, str) and cur.strip() == "":
+                out[key] = value
+    return out
+
+
+def _fetch_ipapi_info(ip: str) -> dict:
+    clean_ip = (ip or "").strip()
+    if not clean_ip:
+        return {}
+
+    info = {}
+    query = urllib.parse.urlencode({
+        "fields": "status,query,countryCode,regionName,city,as,isp,proxy,hosting,mobile",
+    })
+
+    for base in IP_FALLBACK_APIS:
+        try:
+            url = f"{base}/{clean_ip}?{query}"
+            req = urllib.request.Request(
+                url,
+                headers={
+                    "User-Agent": "Mozilla/5.0 (Xray-Node-Tester)",
+                    "Accept": "application/json,text/plain,*/*",
+                },
+            )
+            with urllib.request.urlopen(req, timeout=IP_CHECK_TIMEOUT) as resp:
+                text = resp.read().decode("utf-8", errors="ignore")
+            payload = json.loads(text)
+            info = _parse_ipapi_payload(payload)
+            if info.get("ip_country") or info.get("ip_org"):
+                break
+        except Exception:
+            continue
+
+    if not info.get("exit_ip"):
+        info["exit_ip"] = clean_ip
+    return info
+
+def _fetch_exit_ip_via_socks(socks_port: int) -> str:
+    try:
+        curl = subprocess.run(
+            [
+                CURL_BIN,
+                "-m",
+                str(min(CONNECT_TIMEOUT, 8)),
+                "-s",
+                "--socks5-hostname",
+                f"127.0.0.1:{socks_port}",
+                IP_ECHO_URL,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=CONNECT_TIMEOUT + 2,
+        )
+    except Exception:
+        return ""
+    if curl.returncode != 0:
+        return ""
+    return _extract_ip_from_response(curl.stdout or "")
+
+
+def _fetch_ipcheck_info(ip: str) -> dict:
+    clean_ip = (ip or "").strip()
+    if not clean_ip:
+        return {}
+
+    primary = {}
+    try:
+        query = urllib.parse.urlencode({"ip": clean_ip, "lang": "zh-CN"})
+        url = f"{IP_CHECK_API}?{query}"
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Xray-Node-Tester)",
+                "Accept": "application/json,text/plain,*/*",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=IP_CHECK_TIMEOUT) as resp:
+            text = resp.read().decode("utf-8", errors="ignore")
+        payload = json.loads(text)
+        primary = _parse_ipcheck_payload(payload)
+    except Exception:
+        primary = {}
+
+    fallback = _fetch_ipapi_info(clean_ip)
+    info = _merge_ip_info(primary, fallback)
+
+    if not info.get("exit_ip"):
+        info["exit_ip"] = clean_ip
+    return info
+
+
 def _run_xray_test(outbound, test_url: str):
     if not os.path.exists(XRAY_BIN):
         return {"success": False, "error": "xray binary not found"}
@@ -979,7 +1220,11 @@ def _run_xray_test(outbound, test_url: str):
         code = curl.stdout.strip()
 
         if curl.returncode == 0 and code.startswith("2"):
-            return {"success": True, "latency_ms": latency_ms, "http_code": code}
+            result = {"success": True, "latency_ms": latency_ms, "http_code": code}
+            exit_ip = _fetch_exit_ip_via_socks(socks_port)
+            if exit_ip:
+                result["ip_info"] = _fetch_ipcheck_info(exit_ip)
+            return result
         error = f"curl rc={curl.returncode} http={code} stderr={curl.stderr.strip()}"
         return {"success": False, "latency_ms": latency_ms, "error": error}
     except Exception as e:
@@ -1039,7 +1284,7 @@ def _query_nodes(owner: str, q: str = "", ntype: str = "all", status: str = "all
         count_sql = f"""
             SELECT COUNT(*) AS c
             FROM nodes n
-            LEFT JOIN node_status s ON s.node_id = n.id
+            LEFT JOIN node_status s ON s.owner = n.owner AND s.node_id = n.id
             WHERE {where_sql}
         """
         cur = conn.execute(count_sql, params)
@@ -1047,9 +1292,11 @@ def _query_nodes(owner: str, q: str = "", ntype: str = "all", status: str = "all
 
         data_sql = f"""
             SELECT n.id, n.type, n.raw, n.created_at,
-                   s.status, s.latency_ms, s.error, s.checked_at
+                   s.status, s.latency_ms, s.error, s.checked_at,
+                   s.exit_ip, s.ip_country, s.ip_region, s.ip_city, s.ip_asn,
+                   s.ip_org, s.ip_risk, s.ip_type, s.ip_proxy, s.ip_checked_at
             FROM nodes n
-            LEFT JOIN node_status s ON s.node_id = n.id
+            LEFT JOIN node_status s ON s.owner = n.owner AND s.node_id = n.id
             WHERE {where_sql}
             ORDER BY n.created_at DESC
         """
@@ -1083,6 +1330,16 @@ def _list_nodes(owner: str, page: int = 1, page_size: int = 20, q: str = "", nty
         node["latency_ms"] = row["latency_ms"]
         node["error"] = row["error"] or ""
         node["checked_at"] = row["checked_at"] or ""
+        node["exit_ip"] = row["exit_ip"] or ""
+        node["ip_country"] = row["ip_country"] or ""
+        node["ip_region"] = row["ip_region"] or ""
+        node["ip_city"] = row["ip_city"] or ""
+        node["ip_asn"] = row["ip_asn"] or ""
+        node["ip_org"] = row["ip_org"] or ""
+        node["ip_risk"] = row["ip_risk"]
+        node["ip_type"] = row["ip_type"] or ""
+        node["ip_proxy"] = row["ip_proxy"] or ""
+        node["ip_checked_at"] = row["ip_checked_at"] or ""
         nodes.append(node)
 
     return nodes, total
@@ -1128,6 +1385,9 @@ def _update_status(owner: str, node_id: str, result: dict):
     conn = _db()
     try:
         success = bool(result.get("success"))
+        ip_info = result.get("ip_info")
+        if not isinstance(ip_info, dict):
+            ip_info = {}
         # read current consecutive_fail
         row = conn.execute(
             "SELECT consecutive_fail FROM node_status WHERE owner=? AND node_id=?",
@@ -1141,14 +1401,27 @@ def _update_status(owner: str, node_id: str, result: dict):
 
         conn.execute(
             """
-            INSERT INTO node_status (node_id, owner, status, latency_ms, error, checked_at, consecutive_fail)
-            VALUES (?,?,?,?,?,?,?)
+            INSERT INTO node_status (
+                node_id, owner, status, latency_ms, error, checked_at, consecutive_fail,
+                exit_ip, ip_country, ip_region, ip_city, ip_asn, ip_org, ip_risk, ip_type, ip_proxy, ip_checked_at
+            )
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(owner, node_id) DO UPDATE SET
                 status=excluded.status,
                 latency_ms=excluded.latency_ms,
                 error=excluded.error,
                 checked_at=excluded.checked_at,
-                consecutive_fail=excluded.consecutive_fail
+                consecutive_fail=excluded.consecutive_fail,
+                exit_ip=COALESCE(excluded.exit_ip, node_status.exit_ip),
+                ip_country=COALESCE(excluded.ip_country, node_status.ip_country),
+                ip_region=COALESCE(excluded.ip_region, node_status.ip_region),
+                ip_city=COALESCE(excluded.ip_city, node_status.ip_city),
+                ip_asn=COALESCE(excluded.ip_asn, node_status.ip_asn),
+                ip_org=COALESCE(excluded.ip_org, node_status.ip_org),
+                ip_risk=COALESCE(excluded.ip_risk, node_status.ip_risk),
+                ip_type=COALESCE(excluded.ip_type, node_status.ip_type),
+                ip_proxy=COALESCE(excluded.ip_proxy, node_status.ip_proxy),
+                ip_checked_at=COALESCE(excluded.ip_checked_at, node_status.ip_checked_at)
             """,
             (
                 node_id,
@@ -1158,6 +1431,16 @@ def _update_status(owner: str, node_id: str, result: dict):
                 result.get("error", ""),
                 _now_str(),
                 new_fail,
+                (ip_info.get("exit_ip") or "").strip() or None,
+                (ip_info.get("ip_country") or "").strip() or None,
+                (ip_info.get("ip_region") or "").strip() or None,
+                (ip_info.get("ip_city") or "").strip() or None,
+                (ip_info.get("ip_asn") or "").strip() or None,
+                (ip_info.get("ip_org") or "").strip() or None,
+                ip_info.get("ip_risk"),
+                (ip_info.get("ip_type") or "").strip() or None,
+                (ip_info.get("ip_proxy") or "").strip() or None,
+                _now_str() if ip_info else None,
             )
         )
 
@@ -1597,7 +1880,7 @@ def add_node(request: Request, node_type: str = Form(...), raw: str = Form(...))
     return {"success": True}
 
 
-@app.put("/api/nodes/{node_id}")
+@app.put("/api/nodes/id/{node_id}")
 def update_node(request: Request, node_id: str, node_type: str = Form(...), raw: str = Form(...)):
     raw = raw.strip()
     if not raw:
@@ -1621,7 +1904,7 @@ def update_node(request: Request, node_id: str, node_type: str = Form(...), raw:
     return {"success": True}
 
 
-@app.delete("/api/nodes/{node_id}")
+@app.delete("/api/nodes/id/{node_id}")
 def delete_node(request: Request, node_id: str):
     if not _find_node_by_id(request.state.user, node_id):
         raise HTTPException(status_code=404, detail="node not found")
@@ -1629,7 +1912,7 @@ def delete_node(request: Request, node_id: str):
     return {"success": True}
 
 
-@app.post("/api/nodes/{node_id}/test")
+@app.post("/api/nodes/id/{node_id}/test")
 def test_node(request: Request, node_id: str):
     item = _find_node_by_id(request.state.user, node_id)
     if not item:
@@ -1666,12 +1949,24 @@ def nodes_status(request: Request, ids: str | None = None):
                 return JSONResponse({})
             placeholders = ",".join(["?"] * len(id_list))
             cur = conn.execute(
-                f"SELECT node_id, status, latency_ms, error, checked_at FROM node_status WHERE owner=? AND node_id IN ({placeholders})",
+                f"""
+                SELECT node_id, status, latency_ms, error, checked_at,
+                       exit_ip, ip_country, ip_region, ip_city, ip_asn,
+                       ip_org, ip_risk, ip_type, ip_proxy, ip_checked_at
+                FROM node_status
+                WHERE owner=? AND node_id IN ({placeholders})
+                """,
                 [request.state.user] + id_list,
             )
         else:
             cur = conn.execute(
-                "SELECT node_id, status, latency_ms, error, checked_at FROM node_status WHERE owner=?",
+                """
+                SELECT node_id, status, latency_ms, error, checked_at,
+                       exit_ip, ip_country, ip_region, ip_city, ip_asn,
+                       ip_org, ip_risk, ip_type, ip_proxy, ip_checked_at
+                FROM node_status
+                WHERE owner=?
+                """,
                 (request.state.user,),
             )
         rows = cur.fetchall()
@@ -1685,6 +1980,16 @@ def nodes_status(request: Request, ids: str | None = None):
             "latency_ms": r["latency_ms"],
             "error": r["error"],
             "checked_at": r["checked_at"],
+            "exit_ip": r["exit_ip"],
+            "ip_country": r["ip_country"],
+            "ip_region": r["ip_region"],
+            "ip_city": r["ip_city"],
+            "ip_asn": r["ip_asn"],
+            "ip_org": r["ip_org"],
+            "ip_risk": r["ip_risk"],
+            "ip_type": r["ip_type"],
+            "ip_proxy": r["ip_proxy"],
+            "ip_checked_at": r["ip_checked_at"],
         }
     return JSONResponse(data)
 
@@ -2656,3 +2961,9 @@ def change_password(
         conn.close()
 
     return {"success": True, "relogin": True}
+
+
+
+
+
+

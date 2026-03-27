@@ -15,7 +15,7 @@
 - 管理员后台：用户创建、改角色、重置密码、踢下线、删除用户。
 - 黑名单管理页：管理员可恢复被自动拉黑的节点。
 - 登录安全：失败次数限制与锁定机制，基于 `HttpOnly` Session Cookie。
-
+- IP 信息增强：对状态正常节点记录出口 IP、地区/ASN/运营商与风险分数（ipcheck.ing）。
 ## 当前仓库结构
 
 > 当前代码结构为仓库根目录直接运行（`main.py` 在根目录）。
@@ -136,7 +136,9 @@ uvicorn main:app --host 0.0.0.0 --port 8088
 | `XRAY_LOGIN_LOCK_MIN` | `15` | 触发锁定后锁定时长（分钟） |
 | `XRAY_AUTO_CHECK_INTERVAL` | `30` | 新用户默认自动检测间隔（分钟） |
 | `XRAY_DEFAULT_SUB_INTERVAL_MIN` | `60` | 订阅源默认拉取间隔（分钟） |
-
+| `XRAY_IP_ECHO_URL` | `https://api.ipify.org?format=json` | 通过代理查询出口 IP 的接口 |
+| `XRAY_IP_CHECK_API` | `https://ipcheck.ing/api/ipchecking` | IP 风险信息查询接口 |
+| `XRAY_IP_CHECK_TIMEOUT` | `10` | IP 查询超时（秒） |
 ## Docker 说明
 
 仓库包含 `Dockerfile` / `docker-compose.yml` / `deploy.sh`。容器启动时若检测不到 `xray`，会自动下载最新 Xray 并放入数据目录。
@@ -160,3 +162,4 @@ pytest -q
 - 无法访问页面：检查监听地址、防火墙、反向代理配置。
 - 检测全部失败：优先检查 `xray` 是否可执行、`geoip.dat/geosite.dat` 是否在数据目录。
 - 登录总是失败：检查 `XRAY_AUTH_SALT` 是否意外变更、确认用户密码是否被重置。
+

@@ -1,4 +1,4 @@
-﻿async function api(url, opts) {
+async function api(url, opts) {
   const res = await fetch(url, opts);
   if (!res.ok) {
     const text = await res.text();
@@ -34,6 +34,8 @@ async function refreshNodeStatuses() {
       const statusCell = row.querySelector('.status-cell');
       const latencyCell = row.querySelector('.latency-cell');
       const checkedCell = row.querySelector('.checked-cell');
+      const exitIpCell = row.querySelector('.exit-ip-cell');
+      const ipInfoCell = row.querySelector('.ip-info-cell');
       if (statusCell) {
         statusCell.textContent = st.status || '';
         statusCell.classList.remove('status-ok', 'status-fail');
@@ -41,6 +43,16 @@ async function refreshNodeStatuses() {
         if (st.status === 'fail') statusCell.classList.add('status-fail');
       }
       if (latencyCell) latencyCell.textContent = st.latency_ms || '';
+      if (exitIpCell) exitIpCell.textContent = st.exit_ip || '';
+      if (ipInfoCell) {
+        const country = st.ip_country || '-';
+        const org = st.ip_org || '-';
+        if (st.ip_country || st.ip_org) {
+          ipInfoCell.textContent = `${country} | ${org}`;
+        } else {
+          ipInfoCell.textContent = '';
+        }
+      }
       if (checkedCell) checkedCell.textContent = st.checked_at || '';
     }
   } catch (e) {
@@ -234,7 +246,7 @@ for (const btn of document.querySelectorAll('.test-btn')) {
   btn.addEventListener('click', async () => {
     const id = btn.dataset.id;
     btn.disabled = true;
-    await api(`/api/nodes/${id}/test`, { method: 'POST' });
+    await api(`/api/nodes/id/${id}/test`, { method: 'POST' });
     location.reload();
   });
 }
@@ -243,7 +255,7 @@ for (const btn of document.querySelectorAll('.del-btn')) {
   btn.addEventListener('click', async () => {
     const id = btn.dataset.id;
     if (!confirm('确定删除这个节点吗？')) return;
-    await api(`/api/nodes/${id}`, { method: 'DELETE' });
+    await api(`/api/nodes/id/${id}`, { method: 'DELETE' });
     location.reload();
   });
 }
@@ -258,7 +270,7 @@ for (const btn of document.querySelectorAll('.edit-btn')) {
     const newRaw = prompt('节点链接：', currentRaw);
     if (!newRaw) return;
     const body = new URLSearchParams({ node_type: newType, raw: newRaw });
-    await api(`/api/nodes/${id}`, { method: 'PUT', body });
+    await api(`/api/nodes/id/${id}`, { method: 'PUT', body });
     location.reload();
   });
 }
@@ -523,3 +535,6 @@ for (const btn of document.querySelectorAll('.export-del-btn')) {
 
 setInterval(refreshStatus, 4000);
 setInterval(refreshNodeStatuses, 4000);
+
+
+
